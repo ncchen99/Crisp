@@ -95,9 +95,23 @@ final class OSDBannerService {
 
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: OSDBannerView.size))
         glass.cornerRadius = OSDBannerView.size.height / 2
+        // The system capsule is dark glass with white content in either
+        // appearance. Regular glass and a tint both stay light over light
+        // content, so: clear glass over a black scrim, with the content forced
+        // dark. Scrim alpha measured against the native HUD on a white
+        // backdrop (body 198 native, 197 to 202 here).
+        glass.style = .clear
+        let scrim = NSView(frame: glass.bounds)
+        scrim.wantsLayer = true
+        scrim.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
+        scrim.layer?.cornerRadius = glass.cornerRadius
+        scrim.appearance = NSAppearance(named: .darkAqua)
         let hosting = NSHostingView(rootView: OSDBannerView(model: p.model))
+        hosting.frame = scrim.bounds
+        hosting.autoresizingMask = [.width, .height]
+        scrim.addSubview(hosting)
         // The glass pins its content view to its own edges with constraints.
-        glass.contentView = hosting
+        glass.contentView = scrim
         p.contentView = glass
         return p
     }

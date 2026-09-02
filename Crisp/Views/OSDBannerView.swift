@@ -25,8 +25,8 @@ struct OSDBannerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(model.title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             HStack(spacing: 8) {
                 Image(systemName: leadingSymbol)
@@ -48,11 +48,11 @@ struct OSDBannerView: View {
     private var track: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(.secondary.opacity(0.3))
+                Capsule().fill(.primary.opacity(0.25))
                 Capsule().fill(.primary).frame(width: geo.size.width * model.level)
             }
         }
-        .frame(height: 6)
+        .frame(height: 4)
     }
 
     private var leadingSymbol: String {
