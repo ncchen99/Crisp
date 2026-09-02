@@ -3,8 +3,8 @@ import CoreGraphics
 
 // MARK: - OSDUIHelper Protocol (Private API)
 
-/// OSDImage values for the native macOS OSD.
-/// Brightness up/down uses value 1 (brightness icon with level bar).
+/// Glyph vocabulary shared by both OSD paths: the raw values are what
+/// OSDUIHelper expects, and OSDBannerView picks its symbols from the cases.
 @objc enum OSDImage: CLong {
     case brightness = 1
     case volume = 3
@@ -39,7 +39,7 @@ final class BrightnessHUDService: @unchecked Sendable {
 
     // MARK: - Public API
 
-    /// Shows the native macOS brightness OSD on the specified display.
+    /// Shows the brightness OSD on the specified display.
     /// - Parameters:
     ///   - brightness: Brightness level 0–100
     ///   - screen: The NSScreen on which the OSD should appear
@@ -47,12 +47,12 @@ final class BrightnessHUDService: @unchecked Sendable {
         show(level: brightness, image: .brightness, on: screen)
     }
 
-    /// Shows the native macOS OSD with the given glyph (brightness, volume,
+    /// Shows the OSD with the given glyph (brightness, volume,
     /// mute) and a 0–100 level bar on the specified display.
     func show(level: Double, image: OSDImage, on screen: NSScreen) {
         // macOS 26 draws the pre-Tahoe bottom-centre bezel for OSDUIHelper
         // callers while its own HUD is a capsule under the menu bar, so Crisp
-        // draws that capsule itself there (#76). 14 and 15 keep the helper.
+        // draws that capsule itself there (#76). macOS 14 and 15 keep the helper.
         if #available(macOS 26.0, *) {
             OSDBannerService.shared.show(level: level, image: image, on: screen)
             return
