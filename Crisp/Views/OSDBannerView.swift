@@ -18,12 +18,12 @@ final class OSDBannerModel: ObservableObject {
 @available(macOS 26.0, *)
 struct OSDBannerView: View {
     /// Visible capsule size, measured from the native HUD on 26.5.1.
-    static let size = CGSize(width: 280, height: 54)
+    static let size = CGSize(width: 290, height: 60)
 
     @ObservedObject var model: OSDBannerModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(model.title)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.primary)
@@ -41,7 +41,7 @@ struct OSDBannerView: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .frame(width: Self.size.width, height: Self.size.height)
     }
 

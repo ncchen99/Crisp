@@ -17,10 +17,12 @@ final class OSDBannerService {
     static let shared = OSDBannerService()
     private init() {}
 
-    /// Measured from the native capsule on 26.5.1: 20 pt in from the right
-    /// screen edge, 12 pt below the menu bar. The 280 x 54 size lives on the view.
-    static let trailingInset: CGFloat = 20
-    static let topInset: CGFloat = 12
+    /// Measured from the native capsule on 26.5.1: 12 pt in from the right
+    /// screen edge, 13 pt below the menu bar, corner radius 22. The 290 x 60
+    /// size lives on the view.
+    static let trailingInset: CGFloat = 12
+    static let topInset: CGFloat = 13
+    static let cornerRadius: CGFloat = 22
     /// The window level OSDUIHelper and Control Center draw their capsule at.
     static let windowLevel = NSWindow.Level(rawValue: 2005)
     /// Same hold as the msecUntilFade BrightnessHUDService passes the helper.
@@ -94,7 +96,7 @@ final class OSDBannerService {
         p.alphaValue = 0
 
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: OSDBannerView.size))
-        glass.cornerRadius = OSDBannerView.size.height / 2
+        glass.cornerRadius = Self.cornerRadius
         // The system capsule is dark glass with white content in either
         // appearance. Regular glass and a tint both stay light over light
         // content, so: clear glass over a black scrim, with the content forced
