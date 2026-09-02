@@ -468,3 +468,15 @@ Edit the `#76` bullet under "Pending: follow-ups" in `~/code/Crisp/CLAUDE.md` (t
 - [ ] **Step 5: Stop and hand off**
 
 Do not push. Report to Didrik: the commits on the branch, the before/after crops, what was verified and what was not (make test, lid-open check if he has not done it), and ask for the go-ahead to push and open the PR. The PR description and the later #76 reply are drafted with the `public-writing` skill only after that go-ahead.
+
+### Task 6 (added after the live comparison): play the system HUD's entry and exit
+
+Didrik's screen recordings showed the native capsule growing in with a fade while ours landed at full opacity in one frame, and a second look on a shared white backdrop showed six more differences (size and position, tone, label weight, insets, a dim track fill, missing ticks) plus the reveal anchoring: native settles down from above, ours grew from its centre. Everything measured is in the As built paragraph of the spec. `OSDBannerPanel.reveal(at:)` owns the frame, guards the entry with a deadline (a press inside the entry lets it finish), the scrim sits beside the hosting view and tints in on its own layer animation, and the SwiftUI content fills the hosting view so it follows the window through the grow. A third pass measured the drop curves of both capsules on the same white window frame by frame: the native entry runs about a frame longer than the first fit with a longer tail (fade 0.25 s, grow 0.35 s, tint 0.45 s), and its exit is not an ease-out at all but an exponential-like decay over 0.45 s that shrinks a little further than the entry grew from, so the exit has its own inset and a fitted bezier.
+
+- [x] Constants on `OSDBannerService`, animation in `OSDBannerPanel`, scrim beside the hosting view, `hosting.sizingOptions = []`, flexible frame on `OSDBannerView`
+- [x] Verified live on the Dell: single press and two presses 0.2 s apart, curves measured from screen recordings against the native ones, frame sheets compared by eye
+- [x] Third pass: native and Crisp recorded on the same white window, entry and exit within one to two frames at every sample, ticks and track geometry confirmed at rest
+- [x] Fourth pass: the bevel rim, fitted from native over black, grey and white and verified at rest and through the entry
+- [x] Fifth pass: one fade for the whole capsule, 0.5 s on a fitted bezier, so the glass blur arrives on the native schedule (measured as local contrast over a grid backdrop)
+- [x] Sixth pass: the glass itself. The public clear style is not the HUD's; the private variant 11 is (refraction on, no blur, no face), taken behind a macOS 26 guard and a responds-to check, with the scrim refitted to a flat grey and both curves refitted against measured tone (this glass darkens as about the square root of the window alpha)
+- [x] Commit

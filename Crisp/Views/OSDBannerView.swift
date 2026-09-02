@@ -18,43 +18,58 @@ final class OSDBannerModel: ObservableObject {
 @available(macOS 26.0, *)
 struct OSDBannerView: View {
     /// Visible capsule size, measured from the native HUD on 26.5.1.
-    static let size = CGSize(width: 290, height: 60)
+    static let size = CGSize(width: 290, height: 63)
 
     @ObservedObject var model: OSDBannerModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             Text(model.title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 13))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            HStack(spacing: 8) {
+            HStack(spacing: 4) {
                 Image(systemName: leadingSymbol)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 13))
                     .foregroundStyle(.primary)
                 track
                 Image(systemName: trailingSymbol)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 13))
                     .foregroundStyle(.primary)
                     // Mute keeps the slot so the track does not grow 27 pt.
                     .opacity(model.image == .mute ? 0 : 1)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .frame(width: Self.size.width, height: Self.size.height)
+        .padding(.horizontal, 15)
+        .padding(.top, 10)
+        .padding(.bottom, 13)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var track: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(.primary.opacity(0.25))
-                Capsule().fill(.primary).frame(width: geo.size.width * model.level)
+                Capsule().fill(.white.opacity(0.07))
+                Capsule().fill(.white).frame(width: geo.size.width * model.level)
+                // The 16-step ticks under the native track: 2 pt dots, 6 pt
+                // below its centre line, 5 pt in from each end.
+                HStack(spacing: 0) {
+                    ForEach(0..<17) { tick in
+                        Circle().fill(.white.opacity(0.11)).frame(width: 2, height: 2)
+                        if tick < 16 { Spacer(minLength: 0) }
+                    }
+                }
+                .padding(.horizontal, 5)
+                .offset(y: 6)
             }
         }
         .frame(height: 4)
+        // The native track sits a point above the glyph centre line.
+        .offset(y: -1)
     }
 
+    /// Eject never reaches this path (BrightnessKeyService sends only
+    /// brightness, volume and mute), it takes the brightness glyphs.
     private var leadingSymbol: String {
         switch model.image {
         case .volume: return "speaker.fill"
