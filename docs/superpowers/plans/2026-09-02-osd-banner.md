@@ -170,7 +170,8 @@ final class OSDBannerService {
     private var panels: [CGDirectDisplayID: OSDBannerPanel] = [:]
 
     /// Shows (or refreshes) the banner on `screen`. `level` is 0...100 as the
-    /// key paths pass it, a percentage of the display's extended maximum.
+    /// key paths pass it: for brightness a percentage of the display's extended
+    /// maximum, for volume the DDC volume itself.
     func show(level: Double, image: OSDImage, on screen: NSScreen) {
         guard let displayID = Self.displayID(of: screen) else { return }
         prunePanels()
@@ -216,8 +217,9 @@ final class OSDBannerService {
             backing: .buffered,
             defer: false
         )
+        // Set the level explicitly and never isFloatingPanel: that setter
+        // silently resets the level to floating (3), under the menu bar.
         p.level = Self.windowLevel
-        p.isFloatingPanel = true
         p.hidesOnDeactivate = false
         p.isMovable = false
         p.isOpaque = false
@@ -234,8 +236,7 @@ final class OSDBannerService {
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: OSDBannerView.size))
         glass.cornerRadius = OSDBannerView.size.height / 2
         let hosting = NSHostingView(rootView: OSDBannerView(model: p.model))
-        hosting.frame = glass.bounds
-        hosting.autoresizingMask = [.width, .height]
+        // The glass pins its content view to its own edges with constraints.
         glass.contentView = hosting
         p.contentView = glass
         return p
@@ -245,6 +246,7 @@ final class OSDBannerService {
 /// One banner window. Holds its model and the hide timer; OSDBannerService
 /// owns placement and content.
 @available(macOS 26.0, *)
+@MainActor
 final class OSDBannerPanel: NSPanel {
     let model = OSDBannerModel()
     private var hideWork: DispatchWorkItem?
@@ -362,6 +364,8 @@ Claude-Session: https://claude.ai/code/session_016kcKMwzjxnj9MVvEndMKov"
 Preconditions: `/Applications/Crisp.app` exists, Brightness Keys is on in Crisp's panel (Accessibility granted), the Dell U4919DW is the only screen (lid closed). If the key tap fails with the dev signature, use the release identity as CLAUDE.md documents: `CRISP_SIGN_ID="Developer ID Application: Didrik Salve Galteland (HQHWD6JXX7)" make dev`.
 
 Layout budget (from the Task 1 review): the content fits the 54 pt frame with about 3 pt of vertical slack after the padding and spacing fix. Any font or padding increase must keep `NSHostingView(rootView:).fittingSize.height` at or below 54, or the panel clips the bottom of the track.
+
+Checks from the Task 2 review, do them during Steps 2 to 4: the banner window must report layer 2005 in `CGWindowListCopyWindowInfo` next to Control Center's own; measure the visible native capsule's right inset directly (its window overhangs the screen edge, so the inset may be nearer 17 pt than 20); confirm the banner shows over a full-screen app on the target display and behaves when a key is pressed with Mission Control up; with the Dock on the right the banner overlaps it at 2005, check the native HUD does the same; with the menu bar set to auto-hide the banner must land 12 pt below the screen edge without being repositioned.
 
 - [ ] **Step 1: Deploy the dev build**
 
