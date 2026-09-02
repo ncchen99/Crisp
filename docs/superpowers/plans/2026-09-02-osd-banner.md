@@ -361,6 +361,8 @@ Claude-Session: https://claude.ai/code/session_016kcKMwzjxnj9MVvEndMKov"
 
 Preconditions: `/Applications/Crisp.app` exists, Brightness Keys is on in Crisp's panel (Accessibility granted), the Dell U4919DW is the only screen (lid closed). If the key tap fails with the dev signature, use the release identity as CLAUDE.md documents: `CRISP_SIGN_ID="Developer ID Application: Didrik Salve Galteland (HQHWD6JXX7)" make dev`.
 
+Layout budget (from the Task 1 review): the content fits the 54 pt frame with about 3 pt of vertical slack after the padding and spacing fix. Any font or padding increase must keep `NSHostingView(rootView:).fittingSize.height` at or below 54, or the panel clips the bottom of the track.
+
 - [ ] **Step 1: Deploy the dev build**
 
 Run: `make dev`
@@ -397,7 +399,7 @@ Expected: banner-2 shows the track one step fuller than banner-1; banner-gone sh
 
 - [ ] **Step 4: Compare with the native capsule**
 
-Run the mute probe from the brainstorming session (`$SCRATCH/mute-probe`, or press the real mute key twice) and crop the same region: `sips -c 140 520 --cropOffset 0 4600 native.png --out native-crop.png`. Put the two crops side by side and compare size, vertical offset, label size, track thickness and edge treatment. Adjust `size`, the font sizes and the paddings in `OSDBannerView`, and `trailingInset` and `topInset` in `OSDBannerService`, until the Crisp banner reads as the same family. Try `p.hasShadow = true` once: keep it only if the native capsule shows a comparable shadow. Rebuild with `make dev` and re-run Step 2 after each change.
+Run the mute probe from the brainstorming session (`$SCRATCH/mute-probe`, or press the real mute key twice) and crop the same region: `sips -c 140 520 --cropOffset 0 4600 native.png --out native-crop.png`. Put the two crops side by side and compare size, vertical offset, label size, track thickness and edge treatment. Do this in both appearances (System Settings > Appearance, light and dark) and over a bright and a dark wallpaper, since the glass tints from the wallpaper while the labels follow the appearance. Two tuning items the review flagged: the track background at `.secondary.opacity(0.3)` may nearly vanish on glass, and a level of 0 draws no fill at all where the native HUD keeps a small nub. Adjust `size`, the font sizes and the paddings in `OSDBannerView`, and `trailingInset` and `topInset` in `OSDBannerService`, until the Crisp banner reads as the same family. Try `p.hasShadow = true` once: keep it only if the native capsule shows a comparable shadow. Rebuild with `make dev` and re-run Step 2 after each change.
 
 - [ ] **Step 5: Volume and mute variants**
 
@@ -408,7 +410,7 @@ The Dell is not an audio output on this Mac, so the volume path cannot be driven
 ```
 
 Run `make dev`, then `./brightness-key 2` and `./brightness-key 3` with the brightness above and below 50 percent, and crop as in Step 2.
-Expected: speaker symbols with a filled track above 50, the slashed speaker with an empty track below. Then delete the temporary line, `make dev` again, and confirm with one more `./brightness-key 3` that the sun symbols are back.
+Expected: speaker symbols with a filled track above 50, the slashed speaker with an empty track below. Press once above 50 and once below in a row: the track must keep the same length between the volume and the mute banner. Then delete the temporary line, `make dev` again, and confirm with one more `./brightness-key 3` that the sun symbols are back.
 
 - [ ] **Step 6: All-displays mode with the lid open (Didrik)**
 
@@ -443,10 +445,22 @@ Expected: build done, 0 violations, no whitespace errors. `make test` needs full
 Run: `git diff main --stat -- Crisp/Resources/Localizable.xcstrings`
 Expected: empty. The banner shows only the display name.
 
-- [ ] **Step 3: Update the local CLAUDE.md pending entry**
+- [ ] **Step 3: Note the second glass surface in docs/DESIGN.md**
+
+The element doctrine there says glass lives on the panel backdrop only. Add one sentence next to that rule: the OSD banner on macOS 26 is the second glass surface, an `NSGlassEffectView` capsule whose SwiftUI content sits directly on the glass, so the no-stacked-glass rule still holds. Commit it with the trailer:
+
+```bash
+git add docs/DESIGN.md
+git commit -m "Note the OSD banner as the second glass surface in the design doctrine
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016kcKMwzjxnj9MVvEndMKov"
+```
+
+- [ ] **Step 4: Update the local CLAUDE.md pending entry**
 
 Edit the `#76` bullet under "Pending: follow-ups" in `~/code/Crisp/CLAUDE.md` (the worktree file is a symlink; edit the source path) to say: implemented on `brightness-osd-overlay` as a Crisp-drawn glass capsule on macOS 26 (OSDBannerService, OSDBannerView), verified live on the Dell with screenshots, lid-open all-displays check done or pending, PR not yet opened. Keep the note that release notes and the #76 reply come after the merge.
 
-- [ ] **Step 4: Stop and hand off**
+- [ ] **Step 5: Stop and hand off**
 
 Do not push. Report to Didrik: the commits on the branch, the before/after crops, what was verified and what was not (make test, lid-open check if he has not done it), and ask for the go-ahead to push and open the PR. The PR description and the later #76 reply are drafted with the `public-writing` skill only after that go-ahead.
