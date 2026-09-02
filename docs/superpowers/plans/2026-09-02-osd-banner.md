@@ -478,5 +478,7 @@ Didrik's screen recordings showed the native capsule growing in with a fade whil
 - [x] Third pass: native and Crisp recorded on the same white window, entry and exit within one to two frames at every sample, ticks and track geometry confirmed at rest
 - [x] Fourth pass: the bevel rim, fitted from native over black, grey and white and verified at rest and through the entry
 - [x] Fifth pass: one fade for the whole capsule, 0.5 s on a fitted bezier, so the glass blur arrives on the native schedule (measured as local contrast over a grid backdrop)
-- [x] Sixth pass: the glass itself. The public clear style is not the HUD's; the private variant 11 is (refraction on, no blur, no face), taken behind a macOS 26 guard and a responds-to check, with the scrim refitted to a flat grey and both curves refitted against measured tone (this glass darkens as about the square root of the window alpha)
+- [x] Sixth pass: the glass itself. The public clear style is not the HUD's; the private variant 11 is (refraction on, no blur, no face), taken behind a macOS 26 guard and a responds-to check, with the scrim refitted to a flat grey
+- [x] Seventh pass: that variant draws its own edge, a lens band and a dark ring down three sides, which reads as a grey outline. Oversize the sheet 40 pt and mask it back to the capsule, corner radius 26 continuous (fitted to the native corner), scrim refitted to the native tone line, bevel made additive, exit refitted (the masked build's tone is linear in the window alpha, the old one's was not)
+- [x] Dark mode checked: the banner and the native capsule both ignore the system appearance
 - [x] Commit
