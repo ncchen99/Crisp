@@ -84,6 +84,7 @@ What we do, and the rule it traces to.
   Content sits on standard materials. The expanded display-detail region is a
   full-width shaded band (`Color.primary.opacity`), not a floating rounded card.
   *Materials HIG: content layer uses standard materials, no glass-on-glass.*
+  The OSD banner on macOS 26 (OSDBannerService) is the second glass surface: a clear `NSGlassEffectView` capsule whose SwiftUI content sits directly on the glass, over a black scrim for the dark look of the system HUD, so the no-stacked-glass rule still holds.
 
 - **Selection is a one-click checkmark list.** Resolution, refresh rate, preset,
   and color profile are flat checkmark lists (leading checkmark column), not

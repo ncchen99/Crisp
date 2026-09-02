@@ -26,6 +26,8 @@ Inside, top to bottom: the display name in a small secondary label, then a level
 
 Window level 2005, the value both OSDUIHelper and Control Center use on 26.5.1, so the banner sits where the system's own does. Collection behaviour joins all Spaces and shows over full-screen apps, like the menu panel.
 
+As built (2026-09-02, measured against the native volume HUD on the Dell U4919DW): 290 by 60 points, corner radius 22, right edge 12 points in, top 13 points below the menu bar. Regular glass and a tint both stay light over light content while the native capsule is dark with white text in either appearance, so the banner is clear glass over a black scrim of alpha 0.22 with its content forced to the dark appearance; the label is 13 point primary, the track 4 points.
+
 ## Structure
 
 `Services/OSDBannerService.swift`, `@available(macOS 26.0, *)`, `@MainActor`, a shared singleton:
