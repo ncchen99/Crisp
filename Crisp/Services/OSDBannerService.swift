@@ -30,7 +30,8 @@ final class OSDBannerService {
     private var panels: [CGDirectDisplayID: OSDBannerPanel] = [:]
 
     /// Shows (or refreshes) the banner on `screen`. `level` is 0...100 as the
-    /// key paths pass it, a percentage of the display's extended maximum.
+    /// key paths pass it: for brightness a percentage of the display's extended
+    /// maximum, for volume the DDC volume itself.
     func show(level: Double, image: OSDImage, on screen: NSScreen) {
         guard let displayID = Self.displayID(of: screen) else { return }
         prunePanels()
@@ -76,8 +77,9 @@ final class OSDBannerService {
             backing: .buffered,
             defer: false
         )
+        // Set the level explicitly and never isFloatingPanel: that setter
+        // silently resets the level to floating (3), under the menu bar.
         p.level = Self.windowLevel
-        p.isFloatingPanel = true
         p.hidesOnDeactivate = false
         p.isMovable = false
         p.isOpaque = false
@@ -94,8 +96,7 @@ final class OSDBannerService {
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: OSDBannerView.size))
         glass.cornerRadius = OSDBannerView.size.height / 2
         let hosting = NSHostingView(rootView: OSDBannerView(model: p.model))
-        hosting.frame = glass.bounds
-        hosting.autoresizingMask = [.width, .height]
+        // The glass pins its content view to its own edges with constraints.
         glass.contentView = hosting
         p.contentView = glass
         return p
@@ -105,6 +106,7 @@ final class OSDBannerService {
 /// One banner window. Holds its model and the hide timer; OSDBannerService
 /// owns placement and content.
 @available(macOS 26.0, *)
+@MainActor
 final class OSDBannerPanel: NSPanel {
     let model = OSDBannerModel()
     private var hideWork: DispatchWorkItem?
