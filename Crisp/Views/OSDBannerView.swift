@@ -18,12 +18,12 @@ final class OSDBannerModel: ObservableObject {
 @available(macOS 26.0, *)
 struct OSDBannerView: View {
     /// Visible capsule size, measured from the native HUD on 26.5.1.
-    static let size = NSSize(width: 280, height: 54)
+    static let size = CGSize(width: 280, height: 54)
 
     @ObservedObject var model: OSDBannerModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             Text(model.title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -33,15 +33,15 @@ struct OSDBannerView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.primary)
                 track
-                if let trailingSymbol {
-                    Image(systemName: trailingSymbol)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.primary)
-                }
+                Image(systemName: trailingSymbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    // Mute keeps the slot so the track does not grow 27 pt.
+                    .opacity(model.image == .mute ? 0 : 1)
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 9)
+        .padding(.vertical, 8)
         .frame(width: Self.size.width, height: Self.size.height)
     }
 
@@ -59,16 +59,15 @@ struct OSDBannerView: View {
         switch model.image {
         case .volume: return "speaker.fill"
         case .mute: return "speaker.slash.fill"
-        default: return "sun.min.fill"
+        case .brightness, .eject: return "sun.min.fill"
         }
     }
 
-    /// Mute shows the slashed speaker alone with an empty track.
-    private var trailingSymbol: String? {
+    /// Mute hides this symbol but keeps its slot, see body.
+    private var trailingSymbol: String {
         switch model.image {
-        case .volume: return "speaker.wave.3.fill"
-        case .mute: return nil
-        default: return "sun.max.fill"
+        case .volume, .mute: return "speaker.wave.3.fill"
+        case .brightness, .eject: return "sun.max.fill"
         }
     }
 }
