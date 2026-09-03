@@ -17,8 +17,9 @@ final class OSDBannerModel: ObservableObject {
 /// tuned against a screenshot of the native capsule on the same screen.
 @available(macOS 26.0, *)
 struct OSDBannerView: View {
-    /// Visible capsule size, measured from the native HUD on 26.5.1.
-    static let size = CGSize(width: 290, height: 63)
+    /// Visible capsule size, measured from the native HUD on 26.5.1 once it
+    /// has settled (see OSDBannerService.cornerRadius).
+    static let size = CGSize(width: 292, height: 64)
 
     @ObservedObject var model: OSDBannerModel
 
@@ -26,23 +27,29 @@ struct OSDBannerView: View {
         VStack(alignment: .leading, spacing: 7) {
             Text(model.title)
                 .font(.system(size: 13))
-                .foregroundStyle(.primary)
+                // Explicit white, not .primary: the label colour is white at
+                // 85 percent, which reads thinner and duller than the HUD's
+                // label (peak 243 against its 251 over the same body).
+                .foregroundStyle(.white)
                 .lineLimit(1)
+                // One point up, which is where the HUD's label sits: measured
+                // ascender top to baseline, its rows against ours.
+                .offset(y: -1)
             HStack(spacing: 4) {
                 Image(systemName: leadingSymbol)
                     .font(.system(size: 13))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.white)
                 track
                 Image(systemName: trailingSymbol)
                     .font(.system(size: 13))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.white)
                     // Mute keeps the slot so the track does not grow 27 pt.
                     .opacity(model.image == .mute ? 0 : 1)
             }
         }
-        .padding(.horizontal, 15)
+        .padding(.horizontal, 16)
         .padding(.top, 10)
-        .padding(.bottom, 13)
+        .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
