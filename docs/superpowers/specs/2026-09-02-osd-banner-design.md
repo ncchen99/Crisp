@@ -54,6 +54,7 @@ The tone and the colour ride in the same chain, after the blur and before the be
 - Extra Brightness: the call sites already pass the level as a percentage of the display's extended maximum, so the track shows the position within the extended range, as the chiclets did.
 - Screen goes away while a banner is parked: the panel stays at alpha 0 until the next show prunes it.
 - A screen without a matching NSScreen never reaches the service; the call sites guard that already.
+- A still screen. A layer that samples what is behind it needs the screen composited, and WindowServer stops compositing a screen with nothing changing on it, which leaves the sample empty: the tone line turns an empty sample into level 31 and the capsule reads black until something on screen moves. Holding brightness up at 100 percent is that case, because the level does not move either, so nothing in the banner redraws; on a display driven by gamma the press writes nothing at all, and the decrease key only fixes it because a new gamma table refreshes the whole screen. Every screen capture of it looks correct, since a capture forces a composite, which is why this was found by reasoning and confirmed on Didrik's screen rather than measured. The backdrop layer therefore carries `windowServerAware`, which the system's own glass sets on its backdrop layer, and an animation the eye cannot see (a thousandth of the layer's opacity, taken off as the banner goes) that keeps the layer rendering while the banner is up. EDROverlayManager keeps its overlay alive against the same promotion, by re-presenting at 5 fps. Neither change moves the look: the transfer curve, the tone on three backdrops and the edge displacement all measure the same afterwards.
 
 ## Compatibility
 
@@ -70,6 +71,10 @@ No unit test: the only pure logic is the frame arithmetic, two lines. Live verif
 - All-displays mode with the lid open: a banner on each screen at once, including the built-in.
 - A screenshot of the Crisp banner next to the native capsule on the same screen, for the look.
 - Lint and compile green; `make test` runs in CI (no Xcode on this Mac).
+
+## Follow-up, not in this PR
+
+Placement. The banner sits at the top right of the screen, which is where the system's volume HUD sits, so the two overlap when both are up at once. The system anchors each HUD under the menu bar item that owns it (brightness under the Display control, and it lights that item's background while the HUD is up), which is what keeps them apart. The Crisp equivalent is to anchor the banner under Crisp's own status item and light that item while the banner is up. Deferred on purpose: the look of the capsule comes first, and the anchor is a separate change with its own edge cases (a hidden or overflowed status item, an auto-hiding menu bar, the banner on a screen that has no menu bar).
 
 ## Rollout
 
