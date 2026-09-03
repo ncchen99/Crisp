@@ -152,10 +152,16 @@ final class OSDBannerService {
               let tone = makeToneFilters() else { return nil }
         let backdrop = backdropClass.init()
         backdrop.frame = frame
-        // Also private, and the layer works without it, so it is only set
-        // where it exists.
+        // Also private, and the layer works without them, so each is only set
+        // where it exists. windowServerAware is what the system's own glass
+        // sets on its backdrop layer (dumped from a live NSGlassEffectView):
+        // without it the sample is the app's own view of what is behind the
+        // window, which goes stale when nothing on screen changes.
         if backdrop.value(forKey: "scale") != nil {
             backdrop.setValue(backdropScale, forKey: "scale")
+        }
+        if backdrop.value(forKey: "windowServerAware") != nil {
+            backdrop.setValue(true, forKey: "windowServerAware")
         }
         var filters: [Any] = []
         if let blur = makeFilter("gaussianBlur") {
@@ -296,6 +302,7 @@ final class OSDBannerService {
         clip.autoresizingMask = [.width, .height]
         if let backdrop = Self.makeBackdrop(frame: clip.bounds) {
             clip.layer?.addSublayer(backdrop)
+            p.backdrop = backdrop
         } else {
             let scrim = CALayer()
             scrim.frame = clip.bounds
@@ -342,7 +349,11 @@ final class OSDBannerService {
 @MainActor
 final class OSDBannerPanel: NSPanel {
     let model = OSDBannerModel()
+    /// The capsule's backdrop layer, or nil when the private class was
+    /// missing and the banner fell back to the flat grey. See keepAlive.
+    var backdrop: CALayer?
     private var hideWork: DispatchWorkItem?
+    private var keepAliveWork: DispatchWorkItem?
     /// When the running entry ends. `alphaValue` reads the interpolated value
     /// during a window animation, so a second press inside the entry would
     /// otherwise restart it from the shrunk frame.
@@ -357,6 +368,8 @@ final class OSDBannerPanel: NSPanel {
     /// a visible one only moves, so key repeat animates nothing.
     func reveal(at frame: NSRect) {
         hideWork?.cancel()
+        keepAliveWork?.cancel()
+        startKeepAlive()
         if exiting {
             // A second animation on a property does not replace the one in
             // flight: both drive the window, and the exit wins, so the banner
@@ -394,6 +407,31 @@ final class OSDBannerPanel: NSPanel {
         DispatchQueue.main.asyncAfter(deadline: .now() + OSDBannerService.visibleDuration, execute: work)
     }
 
+    /// Keeps the backdrop sampling while the banner is up. A layer that
+    /// samples what is behind it needs the screen composited, and WindowServer
+    /// stops compositing a screen with nothing changing on it: the sample then
+    /// has nothing in it and the capsule goes dark, and stays dark until
+    /// something on screen moves. EDROverlayManager keeps its own overlay
+    /// alive against the same promotion, by re-presenting at 5 fps.
+    ///
+    /// Holding brightness up at 100 percent is exactly the case that hits it:
+    /// the level never moves, so the banner redraws nothing of its own and the
+    /// screen behind it is still. An animation the eye cannot see (a
+    /// thousandth of the layer's opacity) keeps the layer rendering for as
+    /// long as the banner is visible, and is taken off as it goes.
+    private static let keepAliveKey = "crispBannerKeepAlive"
+
+    private func startKeepAlive() {
+        guard let backdrop, backdrop.animation(forKey: Self.keepAliveKey) == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.999
+        pulse.duration = 0.25
+        pulse.autoreverses = true
+        pulse.repeatCount = .greatestFiniteMagnitude
+        backdrop.add(pulse, forKey: Self.keepAliveKey)
+    }
+
     /// Leaves the window where the animations have it and lets them go.
     private func stopAnimations() {
         NSAnimationContext.runAnimationGroup { ctx in
@@ -415,6 +453,11 @@ final class OSDBannerPanel: NSPanel {
             ctx.timingFunction = OSDBannerService.exitShrinkCurve
             animator().setFrame(Self.hidden(frame, inset: OSDBannerService.exitInset), display: true)
         }
+        let work = DispatchWorkItem { [weak self] in
+            self?.backdrop?.removeAnimation(forKey: Self.keepAliveKey)
+        }
+        keepAliveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + OSDBannerService.fadeOutDuration, execute: work)
     }
 
     /// The hidden frame: `frame` inset and lifted by the native amounts.
