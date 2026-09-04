@@ -531,6 +531,10 @@ final class OSDBannerPanel: NSPanel {
     /// 1.45 seconds after the leave. A pointer landing on a banner that is
     /// already leaving brings it back.
     func setHovering(_ hovering: Bool) {
+        // A banner that has gone stays gone. Hidden means alpha 0 and the
+        // window is still there, so the pointer crossing the corner it used to
+        // be in still reaches this, and it must not bring it back.
+        if hovering && alphaValue == 0 { return }
         guard model.hovering != hovering else { return }
         model.hovering = hovering
         OSDBannerService.shared.hoverChanged(hovering)

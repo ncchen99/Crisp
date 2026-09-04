@@ -72,7 +72,15 @@ struct OSDBannerView: View {
         .padding(.top, 10)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay { if model.hovering { closeBadge } }
+        .overlay {
+            if model.hovering {
+                closeBadge.transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
+        }
+        // Not there in one frame: the system's badge fades up over about 0.16
+        // seconds, half of it in the first 45 milliseconds, measured from a 75
+        // frames a second recording of the pointer arriving.
+        .animation(.easeOut(duration: Self.badgeFade), value: model.hovering)
     }
 
     /// How far the tick dots' centres sit in from each end of the track.
@@ -81,11 +89,21 @@ struct OSDBannerView: View {
     private static let tickInset: CGFloat = 4.5
 
     /// The knob the pointer gets. Measured on the system HUD at four levels:
-    /// 16 points across, its centre travelling between the track's ends inset
-    /// by its own radius, with the fill running to its trailing edge. At the
-    /// top of the range its centre stops 8 points short of the track end, so
-    /// it is not the tick grid the fill follows when nothing is hovering.
-    private static let knobDiameter: CGFloat = 16
+    /// 16 points across and 14 tall, its centre travelling between the track's
+    /// ends inset by half its width, with the fill running to its trailing
+    /// edge. At the top of the range its centre stops 8 points short of the
+    /// track end, so it is not the tick grid the fill follows when nothing is
+    /// hovering. The shape is Crisp's own slider knob, which is a capsule 20
+    /// by 16 at the small control size, not a circle: the system HUD's knob
+    /// measures the same way, 8 points wide a half point in from its top edge
+    /// where a circle of that height would be 7.
+    private static let knobSize = CGSize(width: 16, height: 14)
+
+    /// How long the hover state takes to arrive, fitted to the system HUD from
+    /// a 75 frames a second recording of the pointer landing on it: its badge
+    /// is up in 0.16 seconds, its knob takes 0.43 with the fill that follows it.
+    private static let badgeFade = 0.16
+    private static let knobFade = 0.42
 
     private var track: some View {
         GeometryReader { geo in
@@ -94,7 +112,7 @@ struct OSDBannerView: View {
                 Capsule().fill(.white.opacity(0.07))
                 Capsule().fill(.white)
                     .frame(width: model.hovering
-                           ? knobCentre(width) + Self.knobDiameter / 2
+                           ? knobCentre(width) + Self.knobSize.width / 2
                            : fillWidth(width))
                 // The 16-step ticks under the native track: 2 pt dots, 6 pt
                 // below its centre line.
@@ -109,12 +127,17 @@ struct OSDBannerView: View {
                 if model.hovering {
                     // Not white: the system's knob reads 245 over its own
                     // white fill, so it is a shade off it.
-                    Circle()
+                    Capsule()
                         .fill(Color(white: 0.96))
-                        .frame(width: Self.knobDiameter, height: Self.knobDiameter)
+                        .frame(width: Self.knobSize.width, height: Self.knobSize.height)
                         .position(x: knobCentre(width), y: 2)
+                        .transition(.scale(scale: 0.3).combined(with: .opacity))
                 }
             }
+            // The knob grows out of the track rather than landing on it, and
+            // the fill follows it, which is what takes the knob nearly three
+            // times as long as the badge to arrive.
+            .animation(.easeOut(duration: Self.knobFade), value: model.hovering)
             // The track itself is 4 points tall, which is nothing to aim at,
             // so the drag reads from a band around it.
             .overlay {
@@ -135,16 +158,16 @@ struct OSDBannerView: View {
     /// The knob's centre for the level, on the system's own mapping: the
     /// travel is the track inset by the knob's radius at both ends.
     private func knobCentre(_ width: CGFloat) -> CGFloat {
-        let radius = Self.knobDiameter / 2
-        return radius + (width - Self.knobDiameter) * max(0, min(1, model.level))
+        let radius = Self.knobSize.width / 2
+        return radius + (width - Self.knobSize.width) * max(0, min(1, model.level))
     }
 
     /// Sets the level from a point on the track, the same mapping back: a
     /// click a quarter of the way along the system's own track set its volume
     /// to 23, not 25, because the knob's travel is what the pointer moves.
     private func slide(to x: CGFloat, width: CGFloat) {
-        let radius = Self.knobDiameter / 2
-        let travel = max(1, width - Self.knobDiameter)
+        let radius = Self.knobSize.width / 2
+        let travel = max(1, width - Self.knobSize.width)
         let level = max(0, min(1, (x - radius) / travel))
         model.level = level
         model.slide?(level)
