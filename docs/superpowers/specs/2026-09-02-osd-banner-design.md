@@ -15,7 +15,7 @@ Decision (Didrik, 2026-09-02): on macOS 26 and later Crisp draws its own banner 
 - The triggers do not change. The three key paths in BrightnessKeyService (under-cursor brightness, all-displays and selected-displays brightness, DDC volume and mute) keep calling `BrightnessHUDService.show(level:image:on:)`.
 - On macOS 26 and later that call draws a Crisp banner on the target screen. Below 26 it runs the existing OSDUIHelper code unchanged.
 - No preference, no new user-facing string. The label is `NSScreen.localizedName`, for volume as well: the native capsule names the audio device, and the display is the audio device in that path.
-- Not interactive. The native capsule accepts pointer input; nobody asked for that.
+- Interactive while the pointer is on it, as the native capsule is: it holds itself up, grows a knob that sets the level, and takes a click on a close badge. See Hover below.
 - No OSD for brightness changes from other sources (panel sliders, presets, crispctl, auto brightness). Same as today.
 
 ## Look
@@ -42,6 +42,16 @@ The item is lit the way the system lights the Sound control while its own HUD is
 
 Crisp's item lives on one screen at a time, and the menu bar draws the same items on every screen, so on a screen the item is not on the banner mirrors its offset from the right edge; AppDelegate.positionPanel already places the menu panel that way. Measured in all-displays mode with two screens up at once, each banner's centre lands within two points of its own screen's copy of the icon. A menu bar with no room for the item leaves that item's window away from the bar, which the anchor drops, and the banner keeps the top right corner it had before. The lit item is the real one, so it lights on the screen the item is on, which is not always the screen the banner is on.
 
+## Hover
+
+The capsule takes the pointer the way the system's does. The pointer resting on it holds it up, grows a knob on the track and puts a close badge on the top left corner; dragging the knob sets that display's level as it moves, and the badge sends the banner away. The pointer leaving starts the 1 second hold again.
+
+The knob is 16 by 14 points, white 0.96 over the fill, and a capsule rather than a circle: Crisp's own slider draws a capsule 20 by 16 at the small control size, and the native knob measures the same way, 8 points wide half a point in from its top edge where a circle of that height would be 7. Its centre travels the track inset by half its width and the fill runs to its trailing edge, which is not the tick grid the resting fill follows: a click a quarter of the way along the native track set its volume to 23, not 25, because what the pointer moves is the knob's travel. The close badge is a disc 17.5 points across, white at 0.76, with an 8.5 point `xmark` in black at 0.5, its centre 9 points in from the corner, which is a couple of points further in than the native's so that it stays inside the window.
+
+Neither part appears in one frame. Fitted to a 75 frames a second recording of the pointer landing on the native HUD, its badge is up in 0.16 seconds, half of that in the first 45 milliseconds, and its knob takes 0.43 with the fill that follows it; the banner's own measure 0.146 and 0.41 on the same instrument. Both ease out, the badge growing in from 0.8 and the knob from 0.3. Measure this with the banner settled, a good half second after the press: a pointer that lands while the banner is still coming up, or already leaving, reads the banner's own 0.55 second fade instead of the badge's.
+
+Two things about the pointer on a window like this one. SwiftUI's `.onHover` wants a key window and this panel never becomes key, so the tracking is an `NSTrackingArea` in a plain view over the hosting view, with `hitTest` returning nil so the clicks still reach the content. And `ignoresMouseEvents` is off only while the banner is up: it goes off at the reveal and back on when the fade ends, and a hover arriving at a banner already at alpha 0 is refused outright, because the window stays where it was and the pointer crossing that corner would otherwise bring back a banner nobody asked for.
+
 ## Structure
 
 `Services/OSDBannerService.swift`, `@available(macOS 26.0, *)`, `@MainActor`, a shared singleton:
@@ -50,7 +60,7 @@ Crisp's item lives on one screen at a time, and the menu bar draws the same item
 - `show(level:image:on:)`: prune panels whose display is no longer in `NSScreen.screens`, get or create the panel for the screen, update the model, then `reveal(at:)` with the frame recomputed from the screen (resolution changes covered): the entry animation when hidden or fading, a plain move when visible, and the hide timer restarted either way.
 - Hide timer: 1 second after the last show, then the 0.45 second shrink with the fade to alpha 0 beside it.
 - Key repeat only touches the model and the timer. No allocation per press.
-- The panel: borderless, non-activating, `ignoresMouseEvents`, `isOpaque` false, clear background, no AppKit window shadow (the glass edge carries the shape; the edge profile matched the native capsule to within two pixels without one), `animationBehavior` none, `hidesOnDeactivate` false, level 2005, collection behaviour transient, ignores cycle, can join all Spaces, full-screen auxiliary.
+- The panel: borderless, non-activating, `ignoresMouseEvents` while hidden (see Hover), `isOpaque` false, clear background, no AppKit window shadow (the glass edge carries the shape; the edge profile matched the native capsule to within two pixels without one), `animationBehavior` none, `hidesOnDeactivate` false, level 2005, collection behaviour transient, ignores cycle, can join all Spaces, full-screen auxiliary.
 - Content: an `NSGlassEffectView` filling the panel, its `contentView` an `NSHostingView` of the banner view.
 
 `Views/OSDBannerView.swift`: SwiftUI, driven by an observable model with title, kind (brightness, volume, mute) and level in 0 to 1 (the service divides the call site's percentage by 100). About 40 lines.
@@ -64,6 +74,7 @@ Crisp's item lives on one screen at a time, and the menu bar draws the same item
 - Extra Brightness: the call sites already pass the level as a percentage of the display's extended maximum, so the track shows the position within the extended range, as the chiclets did.
 - Screen goes away while a banner is parked: the panel stays at alpha 0 until the next show prunes it.
 - A screen without a matching NSScreen never reaches the service; the call sites guard that already.
+- The Crisp panel is open. No banner then: the panel shows the same level on a slider a few points away, and the two moving together is noise. `BrightnessHUDService.suppressed` is set while the panel is up, so this holds on 14 and 15 as well.
 - A still screen. A layer that samples what is behind it needs the screen composited, and WindowServer stops compositing a screen with nothing changing on it, which leaves the sample empty: the tone line turns an empty sample into level 31 and the capsule reads black until something on screen moves. Holding brightness up at 100 percent is that case, because the level does not move either, so nothing in the banner redraws; on a display driven by gamma the press writes nothing at all, and the decrease key only fixes it because a new gamma table refreshes the whole screen. Every screen capture of it looks correct, since a capture forces a composite, which is why this was found by reasoning and confirmed on Didrik's screen rather than measured. The backdrop layer therefore carries `windowServerAware`, which the system's own glass sets on its backdrop layer, and an animation the eye cannot see (a thousandth of the layer's opacity, taken off as the banner goes) that keeps the layer rendering while the banner is up. EDROverlayManager keeps its overlay alive against the same promotion, by re-presenting at 5 fps. Neither change moves the look: the transfer curve, the tone on three backdrops and the edge displacement all measure the same afterwards.
 
 ## Compatibility
@@ -80,6 +91,7 @@ No unit test: the only pure logic is the frame arithmetic, two lines. Live verif
 - Volume and mute keys with a DDC-volume display as the audio output, if one is at hand; otherwise the volume and mute variants are checked with a temporary dev-only call in the brightness path, removed before the PR.
 - All-displays mode with the lid open: a banner on each screen at once, including the built-in.
 - A screenshot of the Crisp banner next to the native capsule on the same screen, for the look.
+- Hover: the banner holds while the pointer is on it, the knob and badge fade in, a click on the track sets that display's brightness or volume, the badge sends it away, and the pointer crossing the corner where a banner used to be brings nothing back.
 - Lint and compile green; `make test` runs in CI (no Xcode on this Mac).
 
 ## Follow-up, not in this PR
