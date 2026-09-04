@@ -462,10 +462,13 @@ final class OSDBannerService {
         root.addSubview(clip)
 
         let hosting = NSHostingView(rootView: OSDBannerView(model: p.model))
-        // The capsule is dark in either system appearance, as the HUD's is,
-        // so its label, glyphs and track are white in both. The appearance
+        // Every colour in the banner is explicit, so the appearance only
+        // reaches what the system draws itself, which is the held knob's
+        // glass. That has to be the light one: the system's own slider knob
+        // lifts its backdrop, and dark glass over the capsule's own tone is
+        // invisible (measured 102 where the body reads 100). The appearance
         // goes here and not on the panel: the capsule takes its own tone from
-        // the grey, and a dark appearance on the panel would tint that too.
+        // the grey, and an appearance on the panel would tint that too.
         hosting.appearance = NSAppearance(named: .darkAqua)
         // No intrinsic-size constraints: the content follows the window
         // through the entry grow and the exit shrink.
@@ -474,9 +477,10 @@ final class OSDBannerService {
         hosting.autoresizingMask = [.width, .height]
         root.addSubview(hosting)
 
-        // Hover is read here and not with SwiftUI's own onHover: this panel
-        // never becomes key, and a tracking area set to be always active is
-        // what follows the pointer into a window like that. The view takes no
+        // Hover is read here and not with SwiftUI's own onHover: onHover wants
+        // a key window, and this panel is key only while the pointer is
+        // already on it, so a tracking area set to be always active is what
+        // sees the pointer arrive. The view takes no
         // clicks (hitTest returns nil), so the track's drag still lands.
         // Three points out, so the badge hanging over the corner is inside it.
         let hover = BannerHoverView(frame: Self.capsuleRect(in: root).insetBy(dx: -3, dy: -3))
@@ -621,7 +625,13 @@ final class OSDBadgeView: NSView {
             .withSymbolConfiguration(config) else { return }
         let view = NSImageView(image: image)
         view.contentTintColor = NSColor(white: 0, alpha: 0.498)
-        view.frame = bounds
+        // Centred on its ink and not on its image. SF Symbols carry their own
+        // bearings: the xmark's ink sits in x 1.000 to 8.375 of a 10 by 10
+        // image, a third of a point left of the middle, and the badge's own
+        // frame lands on a half point (its centre is 6.5 in from the capsule's
+        // corner), which moves it again. Measured on screen at three quarters
+        // of a point left of the disc's centre, so it is put back by that.
+        view.frame = bounds.offsetBy(dx: 0.75, dy: 0)
         view.imageScaling = .scaleNone
         view.autoresizingMask = [.width, .height]
         addSubview(view)
@@ -643,6 +653,9 @@ final class OSDBadgeView: NSView {
 @available(macOS 26.0, *)
 @MainActor
 final class OSDBannerPanel: NSPanel {
+    /// Only ever while the pointer is on the capsule, see setHovering.
+    override var canBecomeKey: Bool { true }
+
     let model = OSDBannerModel()
     /// The capsule's backdrop layer, or nil when the private class was
     /// missing and the banner fell back to the flat grey. See keepAlive.
@@ -744,6 +757,18 @@ final class OSDBannerPanel: NSPanel {
         // tracking area that calls this fires whether the window takes clicks
         // or not, so the pointer arriving is always seen.
         ignoresMouseEvents = !hovering
+        // AppKit draws a slider in a window that is not key in its inactive
+        // state: a grey line and a knob with no glass. The panel is key for
+        // exactly as long as the pointer is on the capsule, which is the only
+        // way to the real control (see OSDBannerView.track), and it hands the
+        // keyboard straight back on the way out. It cannot hold key while the
+        // banner is merely up, or every brightness press would take the
+        // keyboard away from whatever is in front.
+        if hovering {
+            makeKey()
+        } else if isKeyWindow {
+            NSApp.deactivate()
+        }
         OSDBannerService.shared.hoverChanged(hovering)
         fadeBadge(to: hovering)
         if hovering {
