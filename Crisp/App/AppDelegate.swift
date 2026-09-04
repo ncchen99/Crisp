@@ -349,6 +349,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.bannerLightsStatusItem = lit
                 self.statusItem?.button?.highlight(lit || self.isPanelShown)
             }
+            // The banner's own track, dragged with the pointer, goes to the
+            // same services the keys use.
+            OSDBannerService.shared.onSlide = { [weak self] displayID, image, fraction in
+                guard let display = self?.displayManager.displays.first(where: { $0.displayID == displayID })
+                else { return }
+                switch image {
+                case .volume, .mute:
+                    VolumeService.shared.setVolume(fraction * 100, for: display)
+                case .brightness, .eject:
+                    let target = fraction * display.maxBrightness
+                    display.brightness = target
+                    Task { await BrightnessService.shared.setBrightness(target, for: display) }
+                }
+            }
         }
 
         // Overlay a small orange dot on the icon while Keep Awake is on, so it's visible at a
@@ -894,6 +908,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         p.orderFrontRegardless()
         p.makeKey()
         isPanelShown = true
+        // The panel carries brightness and volume on its own sliders, so the
+        // OSD stays away while it is open.
+        BrightnessHUDService.shared.suppressed = true
         // Native items keep the menu bar button highlighted while their panel
         // is open. Safe to set synchronously: the click never starts the
         // button's own tracking (the interceptor swallowed it), so nothing
@@ -967,6 +984,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func closePanel() {
         guard let p = panel, isPanelShown else { return }
         isPanelShown = false
+        BrightnessHUDService.shared.suppressed = false
         // Not plain false: the banner may be up, and it holds the same light.
         statusItem?.button?.highlight(bannerLightsStatusItem)
         canvas.parkSpring()

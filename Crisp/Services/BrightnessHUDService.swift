@@ -37,6 +37,11 @@ final class BrightnessHUDService: @unchecked Sendable {
     static let shared = BrightnessHUDService()
     private init() {}
 
+    /// Held while Crisp's own panel is open. The panel carries the same value
+    /// on its own slider, and a second one over it is noise, so the OSD stays
+    /// away until the panel closes. AppDelegate sets this.
+    var suppressed = false
+
     // MARK: - Public API
 
     /// Shows the brightness OSD on the specified display.
@@ -50,6 +55,7 @@ final class BrightnessHUDService: @unchecked Sendable {
     /// Shows the OSD with the given glyph (brightness, volume,
     /// mute) and a 0–100 level bar on the specified display.
     func show(level: Double, image: OSDImage, on screen: NSScreen) {
+        guard !suppressed else { return }
         // macOS 26 draws the pre-Tahoe bottom-centre bezel for OSDUIHelper
         // callers while its own HUD is a capsule under the menu bar, so Crisp
         // draws that capsule itself there (#76). macOS 14 and 15 keep the helper.

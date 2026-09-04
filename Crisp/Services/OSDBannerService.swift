@@ -131,6 +131,11 @@ final class OSDBannerService {
     /// lighting, because an open panel holds the same highlight.
     var setHighlight: ((Bool) -> Void)?
 
+    /// Takes a level the pointer set on a banner's track: the display, what it
+    /// was showing, and 0...1 of the scale that banner shows. AppDelegate
+    /// wires this to the same services the keys use.
+    var onSlide: ((CGDirectDisplayID, OSDImage, Double) -> Void)?
+
     private var unlightWork: DispatchWorkItem?
 
     /// Shows (or refreshes) the banner on `screen`. `level` is 0...100 as the
@@ -149,6 +154,10 @@ final class OSDBannerService {
         panel.model.title = screen.localizedName
         panel.model.image = image
         panel.model.level = max(0, min(1, level / 100))
+        // Re-wired on every show: the display is the panel's own, but what it
+        // is showing is not (brightness one press, volume the next).
+        panel.model.slide = { [weak self] fraction in self?.onSlide?(displayID, image, fraction) }
+        panel.model.dismiss = { [weak panel] in panel?.dismiss() }
         // The frame is recomputed every time: a resolution change moves the
         // screen edge, and the menu bar item moves on its own.
         panel.reveal(at: Self.frame(on: screen, centredOn: anchorMidX(on: screen)))
@@ -195,9 +204,27 @@ final class OSDBannerService {
     private func light() {
         unlightWork?.cancel()
         setHighlight?(true)
-        let work = DispatchWorkItem { [weak self] in self?.setHighlight?(false) }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            // A banner the pointer is on holds itself up, and the system's own
+            // item stays lit through that, measured 2.25 seconds after the
+            // press. The light goes out with the hold that follows the leave.
+            guard !self.panels.values.contains(where: { $0.model.hovering }) else { return }
+            self.setHighlight?(false)
+        }
         unlightWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.visibleDuration, execute: work)
+    }
+
+    /// Called by a panel when the pointer arrives or leaves, so the menu bar
+    /// item follows the banner it belongs to.
+    fileprivate func hoverChanged(_ hovering: Bool) {
+        if hovering {
+            unlightWork?.cancel()
+            setHighlight?(true)
+        } else {
+            light()
+        }
     }
 
     /// The layer the capsule blurs its backdrop with. Nothing public blurs
@@ -386,6 +413,15 @@ final class OSDBannerService {
         hosting.autoresizingMask = [.width, .height]
         root.addSubview(hosting)
 
+        // Hover is read here and not with SwiftUI's own onHover: this panel
+        // never becomes key, and a tracking area set to be always active is
+        // what follows the pointer into a window like that. The view takes no
+        // clicks (hitTest returns nil), so the track's drag still lands.
+        let hover = BannerHoverView(frame: root.bounds)
+        hover.autoresizingMask = [.width, .height]
+        hover.onHover = { [weak p] inside in p?.setHovering(inside) }
+        root.addSubview(hover)
+
         // The native capsule carries a rim one point wide along its edge,
         // drawn here over the capsule and its content. Measured at rest it
         // lifts the capsule 74 levels over a black backdrop, 47 over a mid
@@ -398,7 +434,9 @@ final class OSDBannerService {
         bevel.layer?.borderWidth = 1
         bevel.layer?.borderColor = NSColor.white.withAlphaComponent(0.36).cgColor
         bevel.autoresizingMask = [.width, .height]
-        root.addSubview(bevel)
+        // Under the content and the hover view: a plain NSView takes every
+        // click inside its bounds, and this one covers the whole capsule.
+        root.addSubview(bevel, positioned: .below, relativeTo: hosting)
 
         p.contentView = root
         return p
@@ -416,6 +454,9 @@ final class OSDBannerPanel: NSPanel {
     var backdrop: CALayer?
     private var hideWork: DispatchWorkItem?
     private var keepAliveWork: DispatchWorkItem?
+    /// Where the banner sits when it is up. Kept so a pointer arriving during
+    /// the exit can bring it back to the frame it was leaving.
+    private var restFrame: NSRect = .zero
     /// When the running entry ends. `alphaValue` reads the interpolated value
     /// during a window animation, so a second press inside the entry would
     /// otherwise restart it from the shrunk frame.
@@ -432,6 +473,11 @@ final class OSDBannerPanel: NSPanel {
         hideWork?.cancel()
         keepAliveWork?.cancel()
         startKeepAlive()
+        restFrame = frame
+        // A banner on screen is a control: the pointer gets a knob on the
+        // track and a close badge, as the system HUD does. Hidden it takes no
+        // clicks at all, see fadeOut.
+        ignoresMouseEvents = false
         if exiting {
             // A second animation on a property does not replace the one in
             // flight: both drive the window, and the exit wins, so the banner
@@ -464,9 +510,43 @@ final class OSDBannerPanel: NSPanel {
         } else {
             setFrame(frame, display: false)
         }
-        let work = DispatchWorkItem { [weak self] in self?.fadeOut() }
+        scheduleHide()
+    }
+
+    /// The hold before the banner leaves, restarted by every press and by the
+    /// pointer leaving the capsule.
+    private func scheduleHide() {
+        hideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.model.hovering else { return }
+            self.fadeOut()
+        }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + OSDBannerService.visibleDuration, execute: work)
+    }
+
+    /// The pointer arriving on the capsule or leaving it. While it is on, the
+    /// banner holds: the system's own stays up as long as the pointer is there
+    /// and starts its hold again when it leaves, measured at 0.2, 0.6, 1.0 and
+    /// 1.45 seconds after the leave. A pointer landing on a banner that is
+    /// already leaving brings it back.
+    func setHovering(_ hovering: Bool) {
+        guard model.hovering != hovering else { return }
+        model.hovering = hovering
+        OSDBannerService.shared.hoverChanged(hovering)
+        if hovering {
+            hideWork?.cancel()
+            if exiting || alphaValue < 1 { reveal(at: restFrame) }
+        } else {
+            scheduleHide()
+        }
+    }
+
+    /// The close badge: the banner goes at once, on the same exit.
+    func dismiss() {
+        setHovering(false)
+        hideWork?.cancel()
+        fadeOut()
     }
 
     /// Keeps the backdrop sampling while the banner is up. A layer that
@@ -517,6 +597,10 @@ final class OSDBannerPanel: NSPanel {
         }
         let work = DispatchWorkItem { [weak self] in
             self?.backdrop?.removeAnimation(forKey: Self.keepAliveKey)
+            // Hidden means alpha 0, not off screen, so the window is still
+            // there to take a click nobody meant for it.
+            self?.ignoresMouseEvents = true
+            self?.model.hovering = false
         }
         keepAliveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + OSDBannerService.fadeOutDuration, execute: work)
@@ -526,4 +610,25 @@ final class OSDBannerPanel: NSPanel {
     private static func hidden(_ frame: NSRect, inset: CGSize) -> NSRect {
         frame.insetBy(dx: inset.width, dy: inset.height).offsetBy(dx: 0, dy: OSDBannerService.hiddenLift)
     }
+}
+
+/// Reads the pointer arriving on the banner and leaving it. SwiftUI's own
+/// onHover tracks in the key window, and this panel never becomes key, so the
+/// tracking area is set to be always active. It takes no clicks: hitTest
+/// returns nil, so the track's drag and the close badge see them instead.
+@available(macOS 26.0, *)
+final class BannerHoverView: NSView {
+    var onHover: ((Bool) -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds,
+                                       options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

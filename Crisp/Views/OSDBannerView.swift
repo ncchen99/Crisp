@@ -9,6 +9,14 @@ final class OSDBannerModel: ObservableObject {
     @Published var title = ""
     @Published var image: OSDImage = .brightness
     @Published var level = 0.0
+    /// Whether the pointer is on the capsule. The system HUD grows a knob and
+    /// a close badge then, and holds itself up until the pointer leaves.
+    @Published var hovering = false
+    /// Takes a level the pointer set on the track, 0...1 of the same scale the
+    /// banner shows. Set by OSDBannerService for the display in question.
+    var slide: ((Double) -> Void)?
+    /// Takes the close badge's click.
+    var dismiss: (() -> Void)?
 }
 
 /// The banner OSDBannerService draws on macOS 26: the display name over a
@@ -64,6 +72,7 @@ struct OSDBannerView: View {
         .padding(.top, 10)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay { if model.hovering { closeBadge } }
     }
 
     /// How far the tick dots' centres sit in from each end of the track.
@@ -71,11 +80,22 @@ struct OSDBannerView: View {
     /// dots 74.5 to 505.5 from the same origin, so 9 px in at both ends.
     private static let tickInset: CGFloat = 4.5
 
+    /// The knob the pointer gets. Measured on the system HUD at four levels:
+    /// 16 points across, its centre travelling between the track's ends inset
+    /// by its own radius, with the fill running to its trailing edge. At the
+    /// top of the range its centre stops 8 points short of the track end, so
+    /// it is not the tick grid the fill follows when nothing is hovering.
+    private static let knobDiameter: CGFloat = 16
+
     private var track: some View {
         GeometryReader { geo in
+            let width = geo.size.width
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.07))
-                Capsule().fill(.white).frame(width: fillWidth(geo.size.width))
+                Capsule().fill(.white)
+                    .frame(width: model.hovering
+                           ? knobCentre(width) + Self.knobDiameter / 2
+                           : fillWidth(width))
                 // The 16-step ticks under the native track: 2 pt dots, 6 pt
                 // below its centre line.
                 HStack(spacing: 0) {
@@ -86,11 +106,66 @@ struct OSDBannerView: View {
                 }
                 .padding(.horizontal, Self.tickInset - 1)
                 .offset(y: 6)
+                if model.hovering {
+                    // Not white: the system's knob reads 245 over its own
+                    // white fill, so it is a shade off it.
+                    Circle()
+                        .fill(Color(white: 0.96))
+                        .frame(width: Self.knobDiameter, height: Self.knobDiameter)
+                        .position(x: knobCentre(width), y: 2)
+                }
+            }
+            // The track itself is 4 points tall, which is nothing to aim at,
+            // so the drag reads from a band around it.
+            .overlay {
+                Color.clear
+                    .frame(height: 22)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { drag in slide(to: drag.location.x, width: width) }
+                    )
             }
         }
         .frame(height: 4)
         // The native track sits a point above the glyph centre line.
         .offset(y: -1)
+    }
+
+    /// The knob's centre for the level, on the system's own mapping: the
+    /// travel is the track inset by the knob's radius at both ends.
+    private func knobCentre(_ width: CGFloat) -> CGFloat {
+        let radius = Self.knobDiameter / 2
+        return radius + (width - Self.knobDiameter) * max(0, min(1, model.level))
+    }
+
+    /// Sets the level from a point on the track, the same mapping back: a
+    /// click a quarter of the way along the system's own track set its volume
+    /// to 23, not 25, because the knob's travel is what the pointer moves.
+    private func slide(to x: CGFloat, width: CGFloat) {
+        let radius = Self.knobDiameter / 2
+        let travel = max(1, width - Self.knobDiameter)
+        let level = max(0, min(1, (x - radius) / travel))
+        model.level = level
+        model.slide?(level)
+    }
+
+    /// The close badge, on the capsule's top left corner while the pointer is
+    /// on it. Measured on the system HUD: a disc 17.5 points across, white at
+    /// about 0.8 over the capsule, centred on the corner itself. This one sits
+    /// a couple of points further in, so that it stays inside the window.
+    private var closeBadge: some View {
+        Button(action: { model.dismiss?() }) {
+            ZStack {
+                Circle().fill(.white.opacity(0.76))
+                Image(systemName: "xmark")
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(.black.opacity(0.5))
+            }
+            .frame(width: 17.5, height: 17.5)
+        }
+        .buttonStyle(.plain)
+        .position(x: 9, y: 9)
     }
 
     /// The fill ends on the tick for the level, not at a plain fraction of the
