@@ -120,6 +120,19 @@ final class OSDBannerService {
 
     private var panels: [CGDirectDisplayID: OSDBannerPanel] = [:]
 
+    /// Crisp's own menu bar item, handed over by AppDelegate once it exists.
+    /// The system hangs each HUD under the menu bar item that owns it, so the
+    /// banner hangs under Crisp's and the two stop landing on top of each
+    /// other. Weak: the item outlives the banner, and neither owns the other.
+    weak var statusItem: NSStatusItem?
+
+    /// Lights that menu bar item while the banner is up, the way the system
+    /// lights the Sound control while its own HUD is up. AppDelegate does the
+    /// lighting, because an open panel holds the same highlight.
+    var setHighlight: ((Bool) -> Void)?
+
+    private var unlightWork: DispatchWorkItem?
+
     /// Shows (or refreshes) the banner on `screen`. `level` is 0...100 as the
     /// key paths pass it: for brightness a percentage of the display's extended
     /// maximum, for volume the DDC volume itself.
@@ -137,16 +150,54 @@ final class OSDBannerService {
         panel.model.image = image
         panel.model.level = max(0, min(1, level / 100))
         // The frame is recomputed every time: a resolution change moves the
-        // top-right corner.
-        panel.reveal(at: Self.frame(on: screen))
+        // screen edge, and the menu bar item moves on its own.
+        panel.reveal(at: Self.frame(on: screen, centredOn: anchorMidX(on: screen)))
+        light()
     }
 
-    /// Top-right of the screen, under the menu bar (visibleFrame excludes it),
-    /// or under the screen edge when the menu bar is hidden.
-    static func frame(on screen: NSScreen) -> NSRect {
-        NSRect(x: screen.frame.maxX - trailingInset - OSDBannerView.size.width,
-               y: screen.visibleFrame.maxY - topInset - OSDBannerView.size.height,
-               width: OSDBannerView.size.width, height: OSDBannerView.size.height)
+    /// Centred on Crisp's menu bar item, under the menu bar (visibleFrame
+    /// excludes it), and never closer than `trailingInset` to either side
+    /// edge. Measured on the system HUD: the brightness capsule's centre sits
+    /// on the Display control's, to half a point, and the volume capsule sits
+    /// at the trailing inset because centring it on the Sound control would
+    /// take it past the screen edge. With no item to measure, the top right
+    /// corner, which is where the banner always sat before.
+    static func frame(on screen: NSScreen, centredOn midX: CGFloat?) -> NSRect {
+        let width = OSDBannerView.size.width
+        let corner = screen.frame.maxX - trailingInset - width
+        var x = corner
+        if let midX {
+            x = min(max(midX - width / 2, screen.frame.minX + trailingInset), corner)
+        }
+        return NSRect(x: x,
+                      y: screen.visibleFrame.maxY - topInset - OSDBannerView.size.height,
+                      width: width, height: OSDBannerView.size.height)
+    }
+
+    /// Where Crisp's menu bar item sits on `screen`, or nil when there is no
+    /// item to hang under. The item is on one screen at a time and the menu
+    /// bar carries the same items on all of them, so its offset from the right
+    /// edge holds on the others; AppDelegate.positionPanel mirrors the menu
+    /// panel the same way. An item the menu bar has no room for keeps a window
+    /// away from the bar, which the last guard drops.
+    private func anchorMidX(on screen: NSScreen) -> CGFloat? {
+        guard let window = statusItem?.button?.window,
+              let itemScreen = window.screen,
+              window.frame.maxY >= itemScreen.frame.maxY - 1 else { return nil }
+        return screen.frame.maxX - (itemScreen.frame.maxX - window.frame.midX)
+    }
+
+    /// Lights the menu bar item while the banner holds, and puts it out as the
+    /// banner starts to leave, not when it has gone: measured on the system's
+    /// own, its item goes dark between 0.85 and 0.95 seconds after the press,
+    /// while its capsule is still half there. One timer for every screen, so a
+    /// press anywhere pushes the light out again, like the hide timer.
+    private func light() {
+        unlightWork?.cancel()
+        setHighlight?(true)
+        let work = DispatchWorkItem { [weak self] in self?.setHighlight?(false) }
+        unlightWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.visibleDuration, execute: work)
     }
 
     /// The layer the capsule blurs its backdrop with. Nothing public blurs
