@@ -72,17 +72,6 @@ struct OSDBannerView: View {
         .padding(.top, 10)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay {
-            // The badge is the one part that fades, and it only fades: the
-            // system's grows no bigger and moves nowhere, it comes up over
-            // about 0.16 seconds, half of that in the first 45 milliseconds.
-            // The knob and its fill are not animated at all, they are there
-            // the moment the pointer is.
-            closeBadge
-                .opacity(model.hovering ? 1 : 0)
-                .allowsHitTesting(model.hovering)
-                .animation(.easeOut(duration: Self.badgeFade), value: model.hovering)
-        }
     }
 
     /// How far the tick dots' centres sit in from each end of the track.
@@ -99,20 +88,19 @@ struct OSDBannerView: View {
     /// by 16 at the small control size, not a circle: the system HUD's knob
     /// measures the same way, 8 points wide a half point in from its top edge
     /// where a circle of that height would be 7.
-    private static let knobSize = CGSize(width: 16, height: 14)
-
-    /// How long the close badge takes to fade up, fitted to the system HUD on
-    /// a 75 frames a second recording of the pointer landing on it.
-    private static let badgeFade = 0.16
+    private static let knobSize = CGSize(width: 18, height: 14)
 
     private var track: some View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.07))
+                // While the knob is out the fill stops at its leading edge
+                // rather than running under it, so the knob sits on the body
+                // alone and its own tone lands where the system's does.
                 Capsule().fill(.white)
                     .frame(width: model.hovering
-                           ? knobCentre(width) + Self.knobSize.width / 2
+                           ? max(0, knobCentre(width) - Self.knobSize.width / 2)
                            : fillWidth(width))
                 // The 16-step ticks under the native track: 2 pt dots, 6 pt
                 // below its centre line.
@@ -125,10 +113,12 @@ struct OSDBannerView: View {
                 .padding(.horizontal, Self.tickInset - 1)
                 .offset(y: 6)
                 if model.hovering {
-                    // Not white: the system's knob reads 245 over its own
-                    // white fill, so it is a shade off it.
+                    // Not white: measured over five backdrops the system's
+                    // knob is white at 0.85 over the capsule body, which reads
+                    // 222 on a black backdrop and 247 on a white one where a
+                    // flat colour would read the same on both.
                     Capsule()
-                        .fill(Color(white: 0.96))
+                        .fill(.white.opacity(0.85))
                         .frame(width: Self.knobSize.width, height: Self.knobSize.height)
                         .position(x: knobCentre(width), y: 2)
                 }
@@ -166,24 +156,6 @@ struct OSDBannerView: View {
         let level = max(0, min(1, (x - radius) / travel))
         model.level = level
         model.slide?(level)
-    }
-
-    /// The close badge, on the capsule's top left corner while the pointer is
-    /// on it. Measured on the system HUD: a disc 17.5 points across, white at
-    /// about 0.8 over the capsule, centred on the corner itself. This one sits
-    /// a couple of points further in, so that it stays inside the window.
-    private var closeBadge: some View {
-        Button(action: { model.dismiss?() }) {
-            ZStack {
-                Circle().fill(.white.opacity(0.76))
-                Image(systemName: "xmark")
-                    .font(.system(size: 8.5, weight: .medium))
-                    .foregroundStyle(.black.opacity(0.5))
-            }
-            .frame(width: 17.5, height: 17.5)
-        }
-        .buttonStyle(.plain)
-        .position(x: 9, y: 9)
     }
 
     /// The fill ends on the tick for the level, not at a plain fraction of the

@@ -178,9 +178,11 @@ final class OSDBannerService {
         if let midX {
             x = min(max(midX - width / 2, screen.frame.minX + trailingInset), corner)
         }
+        // The window is the capsule plus the overhang the close badge needs.
         return NSRect(x: x,
                       y: screen.visibleFrame.maxY - topInset - OSDBannerView.size.height,
                       width: width, height: OSDBannerView.size.height)
+            .insetBy(dx: -windowMargin, dy: -windowMargin)
     }
 
     /// Where Crisp's menu bar item sits on `screen`, or nil when there is no
@@ -237,8 +239,14 @@ final class OSDBannerService {
     /// scrim alone, which holds the tone exactly and only leaves the backdrop
     /// sharp.
     private static func makeBackdrop(frame: NSRect) -> CALayer? {
-        guard let backdropClass = NSClassFromString("CABackdropLayer") as? CALayer.Type,
-              let tone = makeToneFilters() else { return nil }
+        guard let tone = makeToneFilters() else { return nil }
+        return makeBackdrop(frame: frame, blur: backdropBlurRadius, tone: tone, refract: true)
+    }
+
+    private static func makeBackdrop(frame: NSRect, blur: CGFloat,
+                                     tone: [NSObject], refract: Bool) -> CALayer? {
+        guard let backdropClass = NSClassFromString("CABackdropLayer") as? CALayer.Type
+        else { return nil }
         let backdrop = backdropClass.init()
         backdrop.frame = frame
         // Also private, and the layer works without them, so each is only set
@@ -253,19 +261,44 @@ final class OSDBannerService {
             backdrop.setValue(true, forKey: "windowServerAware")
         }
         var filters: [Any] = []
-        if let blur = makeFilter("gaussianBlur") {
-            blur.setValue(backdropBlurRadius, forKey: "inputRadius")
+        if let blurFilter = makeFilter("gaussianBlur") {
+            blurFilter.setValue(blur, forKey: "inputRadius")
             // Or the blur pulls in the transparent outside of the capsule and
             // thins its own edge.
-            blur.setValue(true, forKey: "inputNormalizeEdges")
-            filters.append(blur)
+            blurFilter.setValue(true, forKey: "inputNormalizeEdges")
+            filters.append(blurFilter)
         }
         filters.append(contentsOf: tone)
-        if let refraction = makeRefraction(on: backdrop, frame: frame) {
+        if refract, let refraction = makeRefraction(on: backdrop, frame: frame) {
             filters.append(refraction)
         }
         backdrop.filters = filters
         return backdrop
+    }
+
+    /// The close badge's own tone line. The system's badge does not sit on the
+    /// capsule at all: it samples the desktop the way the capsule does and
+    /// lays its own line over it. Measured over flat backdrops of five tones,
+    /// its disc reads 187, 203, 230 and 249 where the desktop reads 56, 116,
+    /// 183 and 255, which is out = 0.31 in + 170. No white at any alpha over
+    /// the capsule can draw that: it takes alpha 0.65 to land on 203 in the
+    /// middle and 0.90 to land on 249 at the top, so over a light desktop a
+    /// flat badge reads as a grey disc where the system's is nearly clear.
+    /// The pair is not that line: the filters do not realise what they are
+    /// asked for (0.31 and 0.667 measure as 0.219 and 0.648), so both were
+    /// fitted against the system's badge over the same backdrops.
+    private static let badgeTone = (multiply: 0.562, add: 0.602)
+    /// Heavier than the capsule's: over a checkerboard the system's badge
+    /// leaves 3 levels of the backdrop's 59, where the capsule leaves 15.
+    private static let badgeBlurRadius: CGFloat = 8
+
+    private static func makeBadgeBackdrop(frame: NSRect) -> CALayer? {
+        guard let multiply = makeFilter("multiplyColor"),
+              let add = makeFilter("colorAdd") else { return nil }
+        multiply.setValue(NSColor(white: badgeTone.multiply, alpha: 1).cgColor, forKey: "inputColor")
+        add.setValue(NSColor(white: badgeTone.add, alpha: 1).cgColor, forKey: "inputColor")
+        return makeBackdrop(frame: frame, blur: badgeBlurRadius,
+                            tone: [multiply, add], refract: false)
     }
 
     /// The grey and the colour, as filters over the sampled backdrop rather
@@ -354,9 +387,37 @@ final class OSDBannerService {
         }
     }
 
+    /// How far the window reaches past the capsule on every side. The close
+    /// badge hangs 2.5 points over the corner and its shadow reaches 30 past
+    /// it, and a window cut to the capsule clips both off.
+    static let windowMargin: CGFloat = 30
+
+    /// The window is the capsule with that margin around it.
+    private static var windowSize: CGSize {
+        CGSize(width: OSDBannerView.size.width + 2 * Self.windowMargin,
+               height: OSDBannerView.size.height + 2 * Self.windowMargin)
+    }
+
+    /// Where the capsule sits inside the window. Views placed here keep their
+    /// margins through the entry grow and the exit shrink, since they resize
+    /// with the window.
+    private static func capsuleRect(in root: NSView) -> NSRect {
+        root.bounds.insetBy(dx: Self.windowMargin, dy: Self.windowMargin)
+    }
+
+    /// The close badge, centred 6.5 points in from the capsule's top left
+    /// corner and 18 across, so it hangs 2.5 points over the corner. Measured
+    /// on the system HUD over a flat backdrop.
+    private static func badgeRect(in root: NSView) -> NSRect {
+        let capsule = capsuleRect(in: root)
+        return NSRect(x: capsule.minX + OSDBadgeView.centreInset - OSDBadgeView.size / 2,
+                      y: capsule.maxY - OSDBadgeView.centreInset - OSDBadgeView.size / 2,
+                      width: OSDBadgeView.size, height: OSDBadgeView.size)
+    }
+
     private func makePanel() -> OSDBannerPanel {
         let p = OSDBannerPanel(
-            contentRect: NSRect(origin: .zero, size: OSDBannerView.size),
+            contentRect: NSRect(origin: .zero, size: Self.windowSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -377,13 +438,13 @@ final class OSDBannerService {
         p.collectionBehavior = [.transient, .ignoresCycle, .canJoinAllSpaces, .fullScreenAuxiliary]
         p.alphaValue = 0
 
-        let root = NSView(frame: NSRect(origin: .zero, size: OSDBannerView.size))
+        let root = BannerRootView(frame: NSRect(origin: .zero, size: Self.windowSize))
         root.wantsLayer = true
 
         // The capsule is what is behind the window, softened and toned down,
         // inside a layer masked to the capsule shape. The content sits above
         // it, so the label, glyphs and track keep their own tone.
-        let clip = NSView(frame: root.bounds)
+        let clip = NSView(frame: Self.capsuleRect(in: root))
         clip.wantsLayer = true
         clip.layer?.cornerRadius = Self.cornerRadius
         clip.layer?.cornerCurve = .continuous
@@ -409,7 +470,7 @@ final class OSDBannerService {
         // No intrinsic-size constraints: the content follows the window
         // through the entry grow and the exit shrink.
         hosting.sizingOptions = []
-        hosting.frame = root.bounds
+        hosting.frame = Self.capsuleRect(in: root)
         hosting.autoresizingMask = [.width, .height]
         root.addSubview(hosting)
 
@@ -417,17 +478,34 @@ final class OSDBannerService {
         // never becomes key, and a tracking area set to be always active is
         // what follows the pointer into a window like that. The view takes no
         // clicks (hitTest returns nil), so the track's drag still lands.
-        let hover = BannerHoverView(frame: root.bounds)
+        // Three points out, so the badge hanging over the corner is inside it.
+        let hover = BannerHoverView(frame: Self.capsuleRect(in: root).insetBy(dx: -3, dy: -3))
         hover.autoresizingMask = [.width, .height]
         hover.onHover = { [weak p] inside in p?.setHovering(inside) }
         root.addSubview(hover)
+
+        // The close badge is drawn here and not in SwiftUI: it samples the
+        // desktop the way the system's does, which no fill can, and it hangs
+        // over the capsule's corner (see Self.windowMargin).
+        let badge = OSDBadgeView(frame: Self.badgeRect(in: root))
+        badge.alphaValue = 0
+        badge.onClick = { [weak p] in p?.dismiss() }
+        if let sample = Self.makeBadgeBackdrop(frame: badge.bounds) {
+            badge.disc.addSublayer(sample)
+            p.badgeBackdrop = sample
+        } else {
+            badge.disc.backgroundColor = NSColor.white.withAlphaComponent(0.65).cgColor
+        }
+        badge.addGlyph()
+        root.addSubview(badge)
+        p.badge = badge
 
         // The native capsule carries a rim one point wide along its edge,
         // drawn here over the capsule and its content. Measured at rest it
         // lifts the capsule 74 levels over a black backdrop, 47 over a mid
         // grey and 28 over a light one, which is white blended over, not
         // added: a flat alpha fits all three.
-        let bevel = NSView(frame: root.bounds)
+        let bevel = NSView(frame: Self.capsuleRect(in: root))
         bevel.wantsLayer = true
         bevel.layer?.cornerRadius = Self.cornerRadius
         bevel.layer?.cornerCurve = .continuous
@@ -443,6 +521,123 @@ final class OSDBannerService {
     }
 }
 
+/// The window is bigger than the capsule so the badge and its shadow have
+/// room (see OSDBannerService.windowMargin), and a banner that is up takes
+/// mouse events. This hands back everything outside the capsule, or the
+/// margin would swallow clicks on the menu bar above the banner and on the
+/// desktop around it.
+@available(macOS 26.0, *)
+final class BannerRootView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        // The same three points the hover view takes, which is what holds the
+        // badge hanging over the capsule's corner.
+        let live = bounds.insetBy(dx: OSDBannerService.windowMargin - 3,
+                                  dy: OSDBannerService.windowMargin - 3)
+        return live.contains(local) ? super.hitTest(point) : nil
+    }
+}
+
+/// The close badge: a disc that samples the desktop through its own backdrop
+/// layer, with the system's xmark over it. AppKit and not SwiftUI, because a
+/// SwiftUI fill can only blend with the capsule under it, and the system's
+/// badge reads the desktop straight (see OSDBannerService.badgeTone).
+@available(macOS 26.0, *)
+final class OSDBadgeView: NSView {
+    /// Measured on the system HUD: 18 points across, its centre 6.5 points in
+    /// from the capsule's top left corner.
+    static let size: CGFloat = 18
+    static let centreInset: CGFloat = 6.5
+
+    var onClick: (() -> Void)?
+    /// The disc itself. It is a sublayer and not this view's own layer because
+    /// the shadow below has to fall outside it, and a layer that masks its
+    /// content to a circle masks its shadow away with it.
+    private(set) var disc = CALayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        disc.frame = bounds
+        disc.cornerRadius = frame.width / 2
+        disc.masksToBounds = true
+        layer?.addSublayer(disc)
+        layer?.insertSublayer(makeShadow(), below: disc)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The shadow the system's badge sits on, which is what makes it an object
+    /// over a light desktop rather than a disc that disappears into it. A
+    /// layer shadow cannot draw it: the system's reaches more than 20 points
+    /// past the disc, and a CALayer shadow at any radius has faded by then.
+    /// So it is a radial gradient, its stops read straight off the system's
+    /// badge over a white backdrop, where the white drops 33 levels at the
+    /// disc's edge, 20 seven points out, 10 eleven points out and is still 3
+    /// down 22 points out. Masked to the outside of the disc: the disc is a
+    /// backdrop sample and lets anything under it through, which took ten
+    /// levels off its own tone.
+    private static let shadowReach: CGFloat = 36
+    private static let shadowStops: [(CGFloat, CGFloat)] = [
+        (0.25, 0.121), (0.278, 0.121), (0.333, 0.081), (0.389, 0.060),
+        (0.472, 0.043), (0.556, 0.033), (0.667, 0.023), (0.778, 0.017),
+        (0.861, 0.015), (1.0, 0)
+    ]
+
+    private func makeShadow() -> CALayer {
+        let reach = Self.shadowReach
+        let shadow = CAGradientLayer()
+        shadow.type = .radial
+        shadow.frame = CGRect(x: bounds.midX - reach, y: bounds.midY - reach,
+                              width: reach * 2, height: reach * 2)
+        shadow.startPoint = CGPoint(x: 0.5, y: 0.5)
+        shadow.endPoint = CGPoint(x: 1, y: 1)
+        shadow.colors = Self.shadowStops.map { NSColor.black.withAlphaComponent($0.1).cgColor }
+        shadow.locations = Self.shadowStops.map { NSNumber(value: Double($0.0)) }
+        let hole = CGMutablePath()
+        hole.addRect(CGRect(origin: .zero, size: shadow.frame.size))
+        hole.addEllipse(in: CGRect(x: reach - bounds.width / 2, y: reach - bounds.height / 2,
+                                   width: bounds.width, height: bounds.height))
+        let mask = CAShapeLayer()
+        mask.frame = CGRect(origin: .zero, size: shadow.frame.size)
+        mask.path = hole
+        mask.fillRule = .evenOdd
+        mask.fillColor = NSColor.black.cgColor
+        shadow.mask = mask
+        return shadow
+    }
+
+    /// The glyph over the disc. Its weight is what fits it: the system's
+    /// covers 29 pixels at 1x and its ink adds up to about 1900 levels below
+    /// the disc, where 9 point bold covers 29 at 1975 and every lighter weight
+    /// leaves the X too thin (8.5 regular covers 19 at 1003). The ink is black
+    /// at half, not a flat grey: swept over six backdrops the system's ink is
+    /// 90, 93, 100, 112, 119 and 125 where its disc is 178, 185, 199, 224, 238
+    /// and 249, which is the same half of the disc every time.
+    func addGlyph() {
+        let config = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+        guard let image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return }
+        let view = NSImageView(image: image)
+        view.contentTintColor = NSColor(white: 0, alpha: 0.498)
+        view.frame = bounds
+        view.imageScaling = .scaleNone
+        view.autoresizingMask = [.width, .height]
+        addSubview(view)
+    }
+
+    /// Round, and only while the badge is there to be clicked.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard alphaValue > 0.5 else { return nil }
+        let local = convert(point, from: superview)
+        let radius = bounds.width / 2
+        return hypot(local.x - bounds.midX, local.y - bounds.midY) <= radius ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
 /// One banner window. Holds its model and the hide timer; OSDBannerService
 /// owns placement and content.
 @available(macOS 26.0, *)
@@ -452,6 +647,9 @@ final class OSDBannerPanel: NSPanel {
     /// The capsule's backdrop layer, or nil when the private class was
     /// missing and the banner fell back to the flat grey. See keepAlive.
     var backdrop: CALayer?
+    /// The close badge and the layer it samples the desktop with.
+    var badge: OSDBadgeView?
+    var badgeBackdrop: CALayer?
     private var hideWork: DispatchWorkItem?
     private var keepAliveWork: DispatchWorkItem?
     /// Where the banner sits when it is up. Kept so a pointer arriving during
@@ -475,9 +673,9 @@ final class OSDBannerPanel: NSPanel {
         startKeepAlive()
         restFrame = frame
         // A banner on screen is a control: the pointer gets a knob on the
-        // track and a close badge, as the system HUD does. Hidden it takes no
-        // clicks at all, see fadeOut.
-        ignoresMouseEvents = false
+        // track and a close badge, as the system HUD does. It takes clicks
+        // only while the pointer is on the capsule, see setHovering.
+        ignoresMouseEvents = !model.hovering
         if exiting {
             // A second animation on a property does not replace the one in
             // flight: both drive the window, and the exit wins, so the banner
@@ -537,12 +735,37 @@ final class OSDBannerPanel: NSPanel {
         if hovering && alphaValue == 0 { return }
         guard model.hovering != hovering else { return }
         model.hovering = hovering
+        // The window is wider than the capsule (see windowMargin), and a
+        // window takes every click inside it whatever its views say: a view
+        // that hands the point back stops the view below it from seeing the
+        // click, not the window below the window. So the banner is only
+        // clickable while the pointer is on the capsule, and the margin, which
+        // covers the menu bar over the banner, never swallows anything. The
+        // tracking area that calls this fires whether the window takes clicks
+        // or not, so the pointer arriving is always seen.
+        ignoresMouseEvents = !hovering
         OSDBannerService.shared.hoverChanged(hovering)
+        fadeBadge(to: hovering)
         if hovering {
             hideWork?.cancel()
             if exiting || alphaValue < 1 { reveal(at: restFrame) }
         } else {
             scheduleHide()
+        }
+    }
+
+    /// The badge fades and only fades, measured on the system HUD over a flat
+    /// backdrop at 75 frames a second: 0.29 seconds in on an ease-out that is
+    /// only a little faster than a straight line, and 0.35 out, which runs
+    /// straight. The knob and the fill are not animated at all.
+    private func fadeBadge(to shown: Bool) {
+        guard let badge else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = shown ? 0.29 : 0.35
+            ctx.timingFunction = shown
+                ? CAMediaTimingFunction(controlPoints: 0, 0, 0.58, 1)
+                : CAMediaTimingFunction(name: .linear)
+            badge.animator().alphaValue = shown ? 1 : 0
         }
     }
 
@@ -568,14 +791,16 @@ final class OSDBannerPanel: NSPanel {
     private static let keepAliveKey = "crispBannerKeepAlive"
 
     private func startKeepAlive() {
-        guard let backdrop, backdrop.animation(forKey: Self.keepAliveKey) == nil else { return }
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1.0
-        pulse.toValue = 0.999
-        pulse.duration = 0.25
-        pulse.autoreverses = true
-        pulse.repeatCount = .greatestFiniteMagnitude
-        backdrop.add(pulse, forKey: Self.keepAliveKey)
+        for layer in [backdrop, badgeBackdrop].compactMap({ $0 })
+        where layer.animation(forKey: Self.keepAliveKey) == nil {
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 1.0
+            pulse.toValue = 0.999
+            pulse.duration = 0.25
+            pulse.autoreverses = true
+            pulse.repeatCount = .greatestFiniteMagnitude
+            layer.add(pulse, forKey: Self.keepAliveKey)
+        }
     }
 
     /// Leaves the window where the animations have it and lets them go.
@@ -601,10 +826,12 @@ final class OSDBannerPanel: NSPanel {
         }
         let work = DispatchWorkItem { [weak self] in
             self?.backdrop?.removeAnimation(forKey: Self.keepAliveKey)
+            self?.badgeBackdrop?.removeAnimation(forKey: Self.keepAliveKey)
             // Hidden means alpha 0, not off screen, so the window is still
             // there to take a click nobody meant for it.
             self?.ignoresMouseEvents = true
             self?.model.hovering = false
+            self?.badge?.alphaValue = 0
         }
         keepAliveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + OSDBannerService.fadeOutDuration, execute: work)
