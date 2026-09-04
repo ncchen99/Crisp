@@ -73,14 +73,16 @@ struct OSDBannerView: View {
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
-            if model.hovering {
-                closeBadge.transition(.scale(scale: 0.8).combined(with: .opacity))
-            }
+            // The badge is the one part that fades, and it only fades: the
+            // system's grows no bigger and moves nowhere, it comes up over
+            // about 0.16 seconds, half of that in the first 45 milliseconds.
+            // The knob and its fill are not animated at all, they are there
+            // the moment the pointer is.
+            closeBadge
+                .opacity(model.hovering ? 1 : 0)
+                .allowsHitTesting(model.hovering)
+                .animation(.easeOut(duration: Self.badgeFade), value: model.hovering)
         }
-        // Not there in one frame: the system's badge fades up over about 0.16
-        // seconds, half of it in the first 45 milliseconds, measured from a 75
-        // frames a second recording of the pointer arriving.
-        .animation(.easeOut(duration: Self.badgeFade), value: model.hovering)
     }
 
     /// How far the tick dots' centres sit in from each end of the track.
@@ -99,11 +101,9 @@ struct OSDBannerView: View {
     /// where a circle of that height would be 7.
     private static let knobSize = CGSize(width: 16, height: 14)
 
-    /// How long the hover state takes to arrive, fitted to the system HUD from
-    /// a 75 frames a second recording of the pointer landing on it: its badge
-    /// is up in 0.16 seconds, its knob takes 0.43 with the fill that follows it.
+    /// How long the close badge takes to fade up, fitted to the system HUD on
+    /// a 75 frames a second recording of the pointer landing on it.
     private static let badgeFade = 0.16
-    private static let knobFade = 0.42
 
     private var track: some View {
         GeometryReader { geo in
@@ -131,13 +131,8 @@ struct OSDBannerView: View {
                         .fill(Color(white: 0.96))
                         .frame(width: Self.knobSize.width, height: Self.knobSize.height)
                         .position(x: knobCentre(width), y: 2)
-                        .transition(.scale(scale: 0.3).combined(with: .opacity))
                 }
             }
-            // The knob grows out of the track rather than landing on it, and
-            // the fill follows it, which is what takes the knob nearly three
-            // times as long as the badge to arrive.
-            .animation(.easeOut(duration: Self.knobFade), value: model.hovering)
             // The track itself is 4 points tall, which is nothing to aim at,
             // so the drag reads from a band around it.
             .overlay {
