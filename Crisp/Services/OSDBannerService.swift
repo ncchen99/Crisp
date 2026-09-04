@@ -18,15 +18,18 @@ final class OSDBannerService {
     static let shared = OSDBannerService()
     private init() {}
 
-    /// Measured from the native capsule on 26.5.1, at rest: 11 pt in from
+    /// Measured from the native capsule on 26.5.1, at rest: 10 pt in from
     /// the right screen edge, 10 pt below the menu bar, corner radius 20 with
-    /// a continuous curve. The 292 x 64 size lives on the view.
+    /// a continuous curve. The 292 x 64 size lives on the view. Read off the
+    /// lit columns of both capsules over a banded backdrop: the HUD's run
+    /// ends one pixel further right than this one's did at inset 11, and both
+    /// runs are the same 292 wide.
     ///
     /// Measure the native capsule at rest, a second after the key press: it
     /// settles down from above over the first half second, and a frame caught
     /// during that settle reads 2 pt narrower, 1 pt shorter and rounder than
     /// the capsule the eye actually sees.
-    static let trailingInset: CGFloat = 11
+    static let trailingInset: CGFloat = 10
     static let topInset: CGFloat = 10
     static let cornerRadius: CGFloat = 20
     /// The capsule's tone, as one grey over the backdrop. The system HUD reads
@@ -73,10 +76,18 @@ final class OSDBannerService {
     /// shoulder at 15 pt in as well. The height is not a dial: 16 bends
     /// nothing at all and 30 folds the backdrop over itself, so it stays at
     /// 20, which is what the system's own glass carries, and the amount does
-    /// the fitting. Nothing weaker than about -100 bends
-    /// anything the eye can find: the amounts the system's own glass variants
-    /// carry, -26 to -80, move this backdrop by a point.
-    static let refractionAmount = -110.0
+    /// the fitting. The amounts the system's own glass variants carry, -26 to
+    /// -80, move this backdrop by well under a point.
+    ///
+    /// Refitted on the tone the edge actually shows, which the displacement
+    /// alone missed: over a backdrop of 16 pt bands, how far each column in
+    /// from the edge sits off the flat tone the middle of the capsule holds.
+    /// The HUD reads 33, 27, 22, 20, 19, 18, 13, 11 and 11 levels off at 2 to
+    /// 10 pt in; -110 read 35, 30, 27, 22, 20, 19, 17, 14 and 12, a quarter
+    /// strong the whole way in, which is the dark band the eye finds along
+    /// the bottom edge over a bright window. This amount reads 32, 27, 21,
+    /// 21, 20, 17, 14, 12 and 11: within a level of the HUD at every column.
+    static let refractionAmount = -80.0
     static let refractionHeight = 20.0
     /// The window level OSDUIHelper and Control Center draw their capsule at.
     static let windowLevel = NSWindow.Level(rawValue: 2005)
