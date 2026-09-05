@@ -362,8 +362,11 @@ final class BrightnessKeyService: @unchecked Sendable {
         Task { @MainActor in
             let displays = DisplayManagerAccessor.shared.displays
             guard let display = displays.first(where: { $0.displayID == displayID }) else { return }
+            // Step from the fade's target while one is running, not from the value
+            // it is passing through, or a held key never gets past the first stop.
+            let from = BrightnessService.shared.inFlightTarget(for: displayID) ?? display.brightness
             let newBrightness = max(0.0, min(display.maxBrightness,
-                                             BrightnessKeySteps.next(from: display.brightness, up: up)))
+                                             BrightnessKeySteps.next(from: from, up: up)))
             // Use smooth animation, cancels any in-progress animation automatically.
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
 
@@ -423,8 +426,9 @@ final class BrightnessKeyService: @unchecked Sendable {
     private func adjustDisplays(_ displays: [DisplayInfo], up: Bool) {
         let screens = NSScreen.screens
         for display in displays {
+            let from = BrightnessService.shared.inFlightTarget(for: display.displayID) ?? display.brightness
             let newBrightness = max(0.0, min(display.maxBrightness,
-                                             BrightnessKeySteps.next(from: display.brightness, up: up)))
+                                             BrightnessKeySteps.next(from: from, up: up)))
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
             if let screen = screens.first(where: {
                 ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
