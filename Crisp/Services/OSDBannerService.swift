@@ -54,18 +54,37 @@ final class OSDBannerService {
     /// layer samples its backdrop at reduced resolution, as the HUD does, and
     /// blurs the smaller sample.
     ///
-    /// Both numbers are fitted against the HUD's own transfer curve, measured
-    /// on a backdrop of dark bars of eight widths under both capsules: what
-    /// share of a bar group's 204-level contrast survives at 1, 2, 3, 4, 6, 8
-    /// and 12 points wide. The eye reads the wide end of that curve, where a
-    /// toolbar icon or a word behind the capsule lives, and the wide end is
-    /// what a single blur radius sets. The HUD passes 57 and 69 percent of a
-    /// 6 and an 8 point bar; a quarter resolution with this radius passes 60
-    /// and 73, and the radius the fine detail alone asked for passed 81 and
-    /// 88, which is why icons stayed legible through the banner and not
-    /// through the HUD.
+    /// Both numbers are fitted on a page of text, which is what the capsule
+    /// sits over in use, and not on the bar target the earlier rounds used: the
+    /// narrowest bar there is four pixels wide and a letter's stem is one, so
+    /// the bars cannot see the detail that decides whether a word behind the
+    /// capsule stays a word. The measure is the energy left above each scale
+    /// inside the capsule, over the same text. The HUD reads 1.00, 2.26, 3.15
+    /// and 4.23 at 2, 4, 8 and 16 pixels; this reads 0.79, 2.05, 3.66 and 4.53.
+    ///
+    /// The two ends pull against each other and no single blur holds both:
+    /// 1.4 holds the HUD's fine grain and shows a quarter more coarse
+    /// structure, 2.5 lands the coarse end and keeps two thirds of the grain.
+    /// This sits between them, nearer the fine end, which is the end the eye
+    /// reads first: 3.2 (0.49 where the HUD has 1.00) is the capsule smearing
+    /// what the HUD only softens.
+    ///
+    /// Two samples mixed, a sharp one over a heavy one, draw the HUD's own
+    /// curve on the bar target and are wrong on the page: the layer's opacity
+    /// does mix them, since what it does not draw is the desktop as it is, but
+    /// a sharp share carries whole letterforms, and at the six percent that
+    /// fits the bars the text behind the capsule stays legible where the HUD's
+    /// is a blob (fine energy 2.23 against the HUD's 1.00). Stacking two
+    /// backdrop layers does not mix them at all: the upper one samples what is
+    /// already composited below it, so a sharp copy over a blurred one is
+    /// measurably the blurred one. Note the layer's opacity also moves the
+    /// tone, and below 1 it reorders the filters in makeToneFilters: the offset
+    /// lands before the multiply there and clips a backdrop over 195.
+    ///
+    /// The radius is not a smooth dial. It is quantised somewhere inside the
+    /// filter and 0.6 measured differently on two runs, where 0.8 repeats.
     static let backdropScale = 0.5
-    static let backdropBlurRadius = 3.2
+    static let backdropBlurRadius = 2.0
     /// How far the edge bends its backdrop, and over how many points. Both are
     /// fitted against the HUD's own bend, measured as displacement rather than
     /// by eye: a stripe backdrop of one period behind both capsules, and the
