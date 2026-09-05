@@ -103,6 +103,12 @@ final class BrightnessAnimator: @unchecked Sendable {
         timer = nil
     }
 
+    /// The value a running fade is heading for, nil while idle. A key repeat has
+    /// to step from this and not from the value mid-fade: the fade crosses the
+    /// stop it is going to, so a press part way through computes the same stop
+    /// again and the level only creeps toward it. See BrightnessKeyService.
+    var pendingTarget: Double? { timer == nil ? nil : targetValue }
+
     /// Animate from `from` to `to` over `duration` seconds using `steps` discrete steps.
     /// `handler(value, isLast)` is called once per step on the main thread.
     /// Calling this cancels any previously running animation.
@@ -177,6 +183,14 @@ final class BrightnessService: @unchecked Sendable {
     @MainActor
     func cancelAnimation(for displayID: CGDirectDisplayID) {
         animators[displayID]?.cancel()
+    }
+
+    /// The brightness a display is fading toward, nil when no fade is running.
+    /// The brightness keys step from this so a repeat lands on the next stop
+    /// instead of re-aiming at the one the fade has not reached yet.
+    @MainActor
+    func inFlightTarget(for displayID: CGDirectDisplayID) -> Double? {
+        animators[displayID]?.pendingTarget
     }
 
     // MARK: - Manual Adjust Cooldown
