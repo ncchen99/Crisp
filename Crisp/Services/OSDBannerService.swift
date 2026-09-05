@@ -49,6 +49,36 @@ final class OSDBannerService {
     /// 1.26 every time, so the sample is saturated by 1.26 / 0.657 after the
     /// grey. Over a strong green the HUD reads 17, 168, 55 and so does this.
     static let backdropSaturation = 1.26 / (1 - 0.343)
+
+    /// Accessibility > Display > Reduce transparency, which the system's own
+    /// capsule follows and this one has to follow with it. Measured on 26.5.1
+    /// over flat backdrops of 0, 115, 179 and 255 the HUD draws 26, 54, 70 and
+    /// 89 with the setting on, a line of 0.247 in + 26 where it otherwise draws
+    /// 0.657 in + 31, so the capsule is much darker. It still tracks what is
+    /// behind it, so this is a heavier blur and a darker line and not a flat
+    /// fill: the backdrop keeps none of its detail (0.09, 0.17, 0.19 and 0.26
+    /// of the energy a page of text carries at 2, 4, 8 and 16 pixels, against
+    /// 1.00, 2.26, 3.15 and 4.23 with the setting off). The colour survives at
+    /// a lower saturation, measured the same way over a green, a red and a
+    /// blue: the HUD keeps 1.65 of what the line leaves, not 1.92.
+    static let reducedScrimColor = NSColor(white: 0.135, alpha: 0.753)
+    static let reducedSaturation = 1.65
+    /// Enough to leave the backdrop no detail at all, as the HUD's does.
+    static let reducedBlurRadius: CGFloat = 20
+    /// The close badge under the same setting: the system's is a flat disc
+    /// with no rim, the same over every backdrop, and it still follows the
+    /// appearance. Measured over a black and a white backdrop in both: disc
+    /// 242 with a 122 cross in the light appearance, 20 with a 149 cross in
+    /// the dark.
+    static func reducedBadgeDisc(dark: Bool) -> NSColor {
+        NSColor(white: dark ? 0.078 : 0.949, alpha: 1)
+    }
+    static func reducedBadgeInk(dark: Bool) -> NSColor {
+        NSColor(white: dark ? 0.584 : 0.478, alpha: 1)
+    }
+    static var reduceTransparency: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
     /// The HUD softens its backdrop, and that is most of what tells the two
     /// apart over a real window. Nothing public blurs the way it does, so the
     /// layer samples its backdrop at reduced resolution, as the HUD does, and
@@ -138,6 +168,8 @@ final class OSDBannerService {
     static let hiddenLift: CGFloat = 5.5
 
     private var panels: [CGDirectDisplayID: OSDBannerPanel] = [:]
+    /// What Reduce transparency was when the panels above were built.
+    private var builtReduced = OSDBannerService.reduceTransparency
 
     /// Crisp's own menu bar item, handed over by AppDelegate once it exists.
     /// The system hangs each HUD under the menu bar item that owns it, so the
@@ -163,6 +195,7 @@ final class OSDBannerService {
     func show(level: Double, image: OSDImage, on screen: NSScreen) {
         guard let displayID = Self.displayID(of: screen) else { return }
         prunePanels()
+        dropPanelsIfTransparencyChanged()
         let panel: OSDBannerPanel
         if let existing = panels[displayID] {
             panel = existing
@@ -259,7 +292,8 @@ final class OSDBannerService {
     /// sharp.
     private static func makeBackdrop(frame: NSRect) -> CALayer? {
         guard let tone = makeToneFilters() else { return nil }
-        return makeBackdrop(frame: frame, blur: backdropBlurRadius, tone: tone, refract: true)
+        let blur = reduceTransparency ? reducedBlurRadius : backdropBlurRadius
+        return makeBackdrop(frame: frame, blur: blur, tone: tone, refract: true)
     }
 
     private static func makeBackdrop(frame: NSRect, blur: CGFloat,
@@ -348,10 +382,12 @@ final class OSDBannerService {
         guard let multiply = makeFilter("multiplyColor"),
               let add = makeFilter("colorAdd"),
               let saturate = makeFilter("colorSaturate") else { return nil }
-        let alpha = scrimColor.alphaComponent
+        let scrim = reduceTransparency ? reducedScrimColor : scrimColor
+        let alpha = scrim.alphaComponent
         multiply.setValue(NSColor(white: 1 - alpha, alpha: 1).cgColor, forKey: "inputColor")
-        add.setValue(NSColor(white: alpha * scrimColor.whiteComponent, alpha: 1).cgColor, forKey: "inputColor")
-        saturate.setValue(backdropSaturation, forKey: "inputAmount")
+        add.setValue(NSColor(white: alpha * scrim.whiteComponent, alpha: 1).cgColor, forKey: "inputColor")
+        saturate.setValue(reduceTransparency ? reducedSaturation : backdropSaturation,
+                          forKey: "inputAmount")
         return [multiply, add, saturate]
     }
 
@@ -414,6 +450,19 @@ final class OSDBannerService {
 
     private static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
         screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+    }
+
+    /// Reduce transparency changes what a panel draws, and every filter is set
+    /// when its layers are made, so the panels are dropped and built again the
+    /// first time the banner comes up after the setting moves. Nothing watches
+    /// the setting: there is no work to do while no banner is on screen.
+    private func dropPanelsIfTransparencyChanged() {
+        guard builtReduced != Self.reduceTransparency else { return }
+        builtReduced = Self.reduceTransparency
+        for (id, panel) in panels {
+            panel.close()
+            panels[id] = nil
+        }
     }
 
     private func prunePanels() {
@@ -493,7 +542,8 @@ final class OSDBannerService {
         } else {
             let scrim = CALayer()
             scrim.frame = clip.bounds
-            scrim.backgroundColor = Self.scrimColor.cgColor
+            scrim.backgroundColor = (Self.reduceTransparency ? Self.reducedScrimColor
+                                                              : Self.scrimColor).cgColor
             clip.layer?.addSublayer(scrim)
         }
         root.addSubview(clip)
@@ -537,7 +587,10 @@ final class OSDBannerService {
             guard let badge else { return }
             p?.badgeBackdrop?.removeFromSuperlayer()
             p?.badgeBackdrop = nil
-            if let sample = Self.makeBadgeBackdrop(frame: badge.bounds, dark: dark) {
+            if Self.reduceTransparency {
+                badge.disc.backgroundColor = Self.reducedBadgeDisc(dark: dark).cgColor
+            } else if let sample = Self.makeBadgeBackdrop(frame: badge.bounds, dark: dark) {
+                badge.disc.backgroundColor = nil
                 badge.disc.addSublayer(sample)
                 p?.badgeBackdrop = sample
             } else {
@@ -660,11 +713,14 @@ final class OSDBadgeView: NSView {
     /// only 0.20 of it (measured 88 over a disc of 46, and 71 over 30).
     private func applyAppearance() {
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let reduced = OSDBannerService.reduceTransparency
         retone?(dark)
-        disc.borderColor = NSColor(white: 1, alpha: dark ? 0.20 : 0.66).cgColor
+        disc.borderColor = reduced ? NSColor.clear.cgColor
+                                   : NSColor(white: 1, alpha: dark ? 0.20 : 0.66).cgColor
         shadowLayer.colors = (dark ? Self.shadowAlphasDark : Self.shadowAlphasLight)
             .map { NSColor.black.withAlphaComponent($0).cgColor }
-        glyph?.contentTintColor = Self.inkColour(dark: dark)
+        glyph?.contentTintColor = reduced ? OSDBannerService.reducedBadgeInk(dark: dark)
+                                          : Self.inkColour(dark: dark)
     }
 
     private static func inkColour(dark: Bool) -> NSColor {
