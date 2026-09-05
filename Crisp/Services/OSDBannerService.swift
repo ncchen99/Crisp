@@ -287,16 +287,34 @@ final class OSDBannerService {
     /// The pair is not that line: the filters do not realise what they are
     /// asked for (0.31 and 0.667 measure as 0.219 and 0.648), so both were
     /// fitted against the system's badge over the same backdrops.
-    private static let badgeTone = (multiply: 0.562, add: 0.602)
+    ///
+    /// The system's badge follows the system appearance, which is the whole
+    /// reason there are two pairs here: over the same grey backdrop its disc
+    /// reads 187 in light and 88 in dark. Swept over four backdrops in each
+    /// appearance, in one run per pair on the same screen, its line is
+    /// 0.431 in + 150 light and 0.510 in + 23 dark, and these pairs land on
+    /// 0.433 in + 150 and 0.510 in + 21. Within 6 levels at every backdrop,
+    /// which is the curve the system's own line carries and a multiply and an
+    /// add cannot draw.
+    ///
+    /// What is still not matched: near the far end of each appearance the
+    /// system sometimes swaps to the other look, a light disc in dark over a
+    /// backdrop of 166 and a dark one in light under about 35. It is not a
+    /// fixed threshold, since the same 166 backdrop left the dark look in place
+    /// on a later run. Following it at all needs the backdrop's own level,
+    /// which only Screen Recording gives.
+    private static func badgeTone(dark: Bool) -> (multiply: Double, add: Double) {
+        dark ? (multiply: 0.636, add: 0.012) : (multiply: 0.562, add: 0.539)
+    }
     /// Heavier than the capsule's: over a checkerboard the system's badge
     /// leaves 3 levels of the backdrop's 59, where the capsule leaves 15.
     private static let badgeBlurRadius: CGFloat = 8
-
-    private static func makeBadgeBackdrop(frame: NSRect) -> CALayer? {
+    private static func makeBadgeBackdrop(frame: NSRect, dark: Bool) -> CALayer? {
         guard let multiply = makeFilter("multiplyColor"),
               let add = makeFilter("colorAdd") else { return nil }
-        multiply.setValue(NSColor(white: badgeTone.multiply, alpha: 1).cgColor, forKey: "inputColor")
-        add.setValue(NSColor(white: badgeTone.add, alpha: 1).cgColor, forKey: "inputColor")
+        let tone = badgeTone(dark: dark)
+        multiply.setValue(NSColor(white: tone.multiply, alpha: 1).cgColor, forKey: "inputColor")
+        add.setValue(NSColor(white: tone.add, alpha: 1).cgColor, forKey: "inputColor")
         return makeBackdrop(frame: frame, blur: badgeBlurRadius,
                             tone: [multiply, add], refract: false)
     }
@@ -494,11 +512,18 @@ final class OSDBannerService {
         let badge = OSDBadgeView(frame: Self.badgeRect(in: root))
         badge.alphaValue = 0
         badge.onClick = { [weak p] in p?.dismiss() }
-        if let sample = Self.makeBadgeBackdrop(frame: badge.bounds) {
-            badge.disc.addSublayer(sample)
-            p.badgeBackdrop = sample
-        } else {
-            badge.disc.backgroundColor = NSColor.white.withAlphaComponent(0.65).cgColor
+        // Rebuilt rather than retuned when the appearance changes, since the
+        // filters are set when the layer is made and the badge is one layer.
+        badge.retone = { [weak badge, weak p] dark in
+            guard let badge else { return }
+            p?.badgeBackdrop?.removeFromSuperlayer()
+            p?.badgeBackdrop = nil
+            if let sample = Self.makeBadgeBackdrop(frame: badge.bounds, dark: dark) {
+                badge.disc.addSublayer(sample)
+                p?.badgeBackdrop = sample
+            } else {
+                badge.disc.backgroundColor = NSColor.white.withAlphaComponent(0.65).cgColor
+            }
         }
         badge.addGlyph()
         root.addSubview(badge)
@@ -558,6 +583,13 @@ final class OSDBadgeView: NSView {
     /// the shadow below has to fall outside it, and a layer that masks its
     /// content to a circle masks its shadow away with it.
     private(set) var disc = CALayer()
+    /// Kept so its resolution can follow the screen, see below.
+    private var shadowLayer = CAGradientLayer()
+    /// Kept so its ink can follow the appearance, see applyAppearance.
+    private weak var glyph: NSImageView?
+    /// Rebuilds the disc's sample of the desktop for the appearance given.
+    /// Set by OSDBannerService, which owns the tone the sample is drawn with.
+    var retone: ((Bool) -> Void)? { didSet { applyAppearance() } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -565,8 +597,59 @@ final class OSDBadgeView: NSView {
         disc.frame = bounds
         disc.cornerRadius = frame.width / 2
         disc.masksToBounds = true
+        disc.borderWidth = 1
+
         layer?.addSublayer(disc)
-        layer?.insertSublayer(makeShadow(), below: disc)
+        shadowLayer = makeShadow()
+        layer?.insertSublayer(shadowLayer, below: disc)
+        applyAppearance()
+    }
+
+    /// A layer made by hand draws at one pixel a point whatever the screen is,
+    /// where AppKit gives a view's own layer the screen's scale. On a Retina
+    /// panel that left the shadow drawn at half resolution and scaled up, which
+    /// is what turned its ramp into steps.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        let scale = window?.backingScaleFactor ?? 2
+        layer?.contentsScale = scale
+        disc.contentsScale = scale
+        shadowLayer.contentsScale = scale
+        shadowLayer.mask?.contentsScale = scale
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyAppearance()
+    }
+
+    /// The two looks the system's badge has. In light it is a light disc with
+    /// a dark cross and in dark the mirror of that, over the same backdrop:
+    /// measured over a grey desktop its disc reads 187 against 88 and its
+    /// cross flips with it. The tone lives in OSDBannerService.badgeAdd; here
+    /// are the ink and the rim.
+    ///
+    /// The ink is half the disc's way to black or to white, and it is the disc
+    /// it goes half way from, not a flat grey: over four backdrops in each
+    /// appearance the system's cross reads 0.491 to 0.502 of the way down in
+    /// light and 0.551 to 0.555 of the way up in dark.
+    ///
+    /// The rim is the disc's own edge, lit. The alpha is what it measures
+    /// rather than what it is asked for, since a one point border is half
+    /// covered by its own anti-aliasing: 0.66 lands on the 0.485 of the disc's
+    /// headroom the system's rim carries in light, and the dark rim carries
+    /// only 0.20 of it (measured 88 over a disc of 46, and 71 over 30).
+    private func applyAppearance() {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        retone?(dark)
+        disc.borderColor = NSColor(white: 1, alpha: dark ? 0.20 : 0.66).cgColor
+        shadowLayer.colors = (dark ? Self.shadowAlphasDark : Self.shadowAlphasLight)
+            .map { NSColor.black.withAlphaComponent($0).cgColor }
+        glyph?.contentTintColor = Self.inkColour(dark: dark)
+    }
+
+    private static func inkColour(dark: Bool) -> NSColor {
+        dark ? NSColor(white: 1, alpha: 0.552) : NSColor(white: 0, alpha: 0.498)
     }
 
     @available(*, unavailable)
@@ -574,22 +657,38 @@ final class OSDBadgeView: NSView {
 
     /// The shadow the system's badge sits on, which is what makes it an object
     /// over a light desktop rather than a disc that disappears into it. A
-    /// layer shadow cannot draw it: the system's reaches more than 20 points
-    /// past the disc, and a CALayer shadow at any radius has faded by then.
-    /// So it is a radial gradient, its stops read straight off the system's
-    /// badge over a white backdrop, where the white drops 33 levels at the
-    /// disc's edge, 20 seven points out, 10 eleven points out and is still 3
-    /// down 22 points out. Masked to the outside of the disc: the disc is a
-    /// backdrop sample and lets anything under it through, which took ten
+    /// radial gradient, masked to the outside of the disc, since the disc is a
+    /// backdrop sample and lets whatever is under it through, which took ten
     /// levels off its own tone.
+    ///
+    /// The alphas are the system's own, read as a drop profile: over a flat
+    /// backdrop, how far the screen sits below it ring by ring, in the quadrant
+    /// up and left of the disc where nothing but desktop is behind. Taken that
+    /// way the system's shadow is a black at 0.079 one point outside the disc,
+    /// 0.044 five points out, 0.024 eleven out and 0.007 twenty-two out, which
+    /// is the same profile over two backdrops. Read it there and not by eye:
+    /// what made an earlier one read as a drawn circle was the near end and not
+    /// the reach, and what made this one read too wide was a tail a third to a
+    /// half too strong from eleven points out. A blur instead of a gradient
+    /// does not do it either, since the tail is far longer than any blur's.
+    ///
+    /// The dark appearance carries its own, weaker profile, which the same
+    /// measurement gives: 0.048 a point out where light has 0.079, and it is
+    /// gone by twenty points out where light still carries 0.024.
     private static let shadowReach: CGFloat = 36
-    private static let shadowStops: [(CGFloat, CGFloat)] = [
-        (0.25, 0.121), (0.278, 0.121), (0.333, 0.081), (0.389, 0.060),
-        (0.472, 0.043), (0.556, 0.033), (0.667, 0.023), (0.778, 0.017),
-        (0.861, 0.015), (1.0, 0)
+    /// Points out from the centre, as fractions of the reach: 9, 10, 12, 14,
+    /// 17, 20, 24, 28, 31, 34, 36. Inside 9 is the disc, which the mask cuts.
+    private static let shadowLocations: [CGFloat] = [
+        0.25, 0.278, 0.333, 0.389, 0.472, 0.556, 0.667, 0.778, 0.861, 0.944, 1.0
+    ]
+    private static let shadowAlphasLight: [CGFloat] = [
+        0.085, 0.079, 0.058, 0.044, 0.031, 0.024, 0.016, 0.010, 0.007, 0.004, 0
+    ]
+    private static let shadowAlphasDark: [CGFloat] = [
+        0.052, 0.048, 0.027, 0.016, 0.008, 0.006, 0.003, 0.001, 0, 0, 0
     ]
 
-    private func makeShadow() -> CALayer {
+    private func makeShadow() -> CAGradientLayer {
         let reach = Self.shadowReach
         let shadow = CAGradientLayer()
         shadow.type = .radial
@@ -597,8 +696,7 @@ final class OSDBadgeView: NSView {
                               width: reach * 2, height: reach * 2)
         shadow.startPoint = CGPoint(x: 0.5, y: 0.5)
         shadow.endPoint = CGPoint(x: 1, y: 1)
-        shadow.colors = Self.shadowStops.map { NSColor.black.withAlphaComponent($0.1).cgColor }
-        shadow.locations = Self.shadowStops.map { NSNumber(value: Double($0.0)) }
+        shadow.locations = Self.shadowLocations.map { NSNumber(value: Double($0)) }
         let hole = CGMutablePath()
         hole.addRect(CGRect(origin: .zero, size: shadow.frame.size))
         hole.addEllipse(in: CGRect(x: reach - bounds.width / 2, y: reach - bounds.height / 2,
@@ -615,26 +713,49 @@ final class OSDBadgeView: NSView {
     /// The glyph over the disc. Its weight is what fits it: the system's
     /// covers 29 pixels at 1x and its ink adds up to about 1900 levels below
     /// the disc, where 9 point bold covers 29 at 1975 and every lighter weight
-    /// leaves the X too thin (8.5 regular covers 19 at 1003). The ink is black
-    /// at half, not a flat grey: swept over six backdrops the system's ink is
-    /// 90, 93, 100, 112, 119 and 125 where its disc is 178, 185, 199, 224, 238
-    /// and 249, which is the same half of the disc every time.
+    /// leaves the X too thin (8.5 regular covers 19 at 1003). Half a point over
+    /// the 9 the ink fit asked for, which is where Didrik wanted it. Its colour
+    /// follows the appearance, see applyAppearance.
     func addGlyph() {
-        let config = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+        let config = NSImage.SymbolConfiguration(pointSize: 9.5, weight: .bold)
         guard let image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)?
             .withSymbolConfiguration(config) else { return }
         let view = NSImageView(image: image)
-        view.contentTintColor = NSColor(white: 0, alpha: 0.498)
-        // Centred on its ink and not on its image. SF Symbols carry their own
-        // bearings: the xmark's ink sits in x 1.000 to 8.375 of a 10 by 10
-        // image, a third of a point left of the middle, and the badge's own
-        // frame lands on a half point (its centre is 6.5 in from the capsule's
-        // corner), which moves it again. Measured on screen at three quarters
-        // of a point left of the disc's centre, so it is put back by that.
-        view.frame = bounds.offsetBy(dx: 0.75, dy: 0)
+        view.contentTintColor = Self.inkColour(
+            dark: effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        // Centred on the X's own crossing point, which is what the eye reads
+        // as the middle of the badge. SF Symbols carry their own bearings, so
+        // the ink is not in the middle of the image they hand over, and a
+        // hand-measured nudge does not survive a size change (or a screen: at
+        // one pixel a point a half point moves nothing at all). This asks the
+        // image where its ink is.
+        let ink = Self.inkOffset(of: image)
+        view.frame = bounds.offsetBy(dx: -ink.x, dy: -ink.y)
         view.imageScaling = .scaleNone
         view.autoresizingMask = [.width, .height]
         addSubview(view)
+        glyph = view
+    }
+
+    /// Where a symbol's ink sits in its own image, in points from the image's
+    /// centre. Read off the image itself, so it follows the point size.
+    private static func inkOffset(of image: NSImage) -> CGPoint {
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return .zero }
+        var minX = rep.pixelsWide, maxX = -1, minY = rep.pixelsHigh, maxY = -1
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.15 {
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return .zero }
+        let scaleX = image.size.width / CGFloat(rep.pixelsWide)
+        let scaleY = image.size.height / CGFloat(rep.pixelsHigh)
+        let midX = CGFloat(minX + maxX + 1) / 2 * scaleX
+        let midY = CGFloat(minY + maxY + 1) / 2 * scaleY
+        // The bitmap's rows run down and the view's y runs up.
+        return CGPoint(x: midX - image.size.width / 2, y: image.size.height / 2 - midY)
     }
 
     /// Round, and only while the badge is there to be clicked.
