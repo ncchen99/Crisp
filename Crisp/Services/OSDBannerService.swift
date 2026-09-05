@@ -227,7 +227,9 @@ final class OSDBannerService {
         let width = OSDBannerView.size.width
         let corner = screen.frame.maxX - trailingInset - width
         var x = corner
-        if let midX {
+        if showsFullScreenWindow(screen) {
+            x = screen.frame.midX - width / 2
+        } else if let midX {
             x = min(max(midX - width / 2, screen.frame.minX + trailingInset), corner)
         }
         // The window is the capsule plus the overhang the close badge needs.
@@ -235,6 +237,34 @@ final class OSDBannerService {
                       y: screen.visibleFrame.maxY - topInset - OSDBannerView.size.height,
                       width: width, height: OSDBannerView.size.height)
             .insetBy(dx: -windowMargin, dy: -windowMargin)
+    }
+
+    /// Whether `screen` is showing a full-screen space, which the system places
+    /// its own capsule by: measured on 26.5.1 over a full-screen window, the
+    /// HUD centres on the screen's midline to the point, instead of hanging
+    /// under a menu bar item. It has to, since the bar and every item on it
+    /// move to another screen while a space is full screen, and the banner
+    /// would otherwise fall back to the corner and sit half a screen from the
+    /// HUD. Note this is only for a real full-screen space: a screen whose menu
+    /// bar has simply moved away keeps the corner, which is where the system
+    /// puts its capsule then too.
+    ///
+    /// The signal is a window covering the display exactly. A zoomed window
+    /// stops short of the menu bar and does not match, and nothing covers a
+    /// display exactly in the ordinary case (measured in both states).
+    private static func showsFullScreenWindow(_ screen: NSScreen) -> Bool {
+        guard let displayID = displayID(of: screen) else { return false }
+        let bounds = CGDisplayBounds(displayID)
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                 kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.contains { window in
+            guard window[kCGWindowLayer as String] as? Int == 0,
+                  let frame = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = frame["X"], let y = frame["Y"],
+                  let width = frame["Width"], let height = frame["Height"] else { return false }
+            return abs(x - bounds.minX) < 2 && abs(y - bounds.minY) < 2
+                && abs(width - bounds.width) < 2 && abs(height - bounds.height) < 2
+        }
     }
 
     /// Where Crisp's menu bar item sits on `screen`, or nil when there is no
