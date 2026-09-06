@@ -98,6 +98,8 @@ Two things about the pointer on a window like this one. SwiftUI's `.onHover` wan
 - `NSGlassEffectView` exists in the macOS 26 SDK only, and CI builds on that SDK with a macOS 14 deployment target. The service file is gated with `@available(macOS 26.0, *)`, the call with `#available`.
 - Both build modes must stay green: `swiftc -swift-version 5` in `make dev` and Swift 6 in Xcode with minimal strict concurrency. Everything in the service is main-actor bound.
 - Strict SwiftLint is part of `make check`.
+- macOS 14 and 15 keep the `OSDUIHelper` bezel, and that is the right answer there, not a fallback: on those releases the helper is what draws the system's own OSD. Verified on 2026-09-06 in the two tart VMs, 14.8.7 and 15.7.7. In each, a real volume key and the call Crisp makes produce the same bezel, same size, same glyph style, same 16 segment bar, in the same place on the screen. What changed on 26 is that Apple moved its own HUD into Control Center (the capsule window's owner) and left the helper drawing the old bezel, which is the whole of #76.
+- One behaviour change reaches 14 and 15: no OSD at all while Crisp's own panel is open, since `BrightnessHUDService.suppressed` guards both paths.
 
 ## Testing and verification
 
