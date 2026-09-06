@@ -84,37 +84,38 @@ final class OSDBannerService {
     /// layer samples its backdrop at reduced resolution, as the HUD does, and
     /// blurs the smaller sample.
     ///
-    /// Both numbers are fitted on a page of text, which is what the capsule
-    /// sits over in use, and not on the bar target the earlier rounds used: the
-    /// narrowest bar there is four pixels wide and a letter's stem is one, so
-    /// the bars cannot see the detail that decides whether a word behind the
-    /// capsule stays a word. The measure is the energy left above each scale
-    /// inside the capsule, over the same text. The HUD reads 1.00, 2.26, 3.15
-    /// and 4.23 at 2, 4, 8 and 16 pixels; this reads 0.79, 2.05, 3.66 and 4.53.
+    /// The measure is the energy in each scale band inside the capsule, over
+    /// the same page of text behind both. Two earlier versions of it were
+    /// wrong and both flattered this. A sparse page let the bare strips the
+    /// measure reads fall between lines, so the HUD's own number moved 16
+    /// percent run to run; the page is dense now and both sides repeat to the
+    /// decimal. And a cumulative measure, the energy above each scale, piles
+    /// every finer band into each number, so all five came out in the same
+    /// ratio and said nothing. Band k is boxmean(k) - boxmean(2k).
     ///
-    /// The two ends pull against each other and no single blur holds both:
-    /// 1.4 holds the HUD's fine grain and shows a quarter more coarse
-    /// structure, 2.5 lands the coarse end and keeps two thirds of the grain.
-    /// This sits between them, nearer the fine end, which is the end the eye
-    /// reads first: 3.2 (0.49 where the HUD has 1.00) is the capsule smearing
-    /// what the HUD only softens.
+    /// Across 1-2, 2-4, 4-8, 8-16 and 16-32 pixels the HUD reads 2.56, 2.65,
+    /// 3.21, 3.37 and 3.25: nearly flat. A gaussian is not flat, so no single
+    /// radius holds both ends. 2.0, which this shipped on the old measure, is
+    /// three and a half times too soft at 1-2 pixels. 1.0 lands the two fine
+    /// bands (2.33 and 2.71) and runs about half again too sharp at the coarse
+    /// ones, and it is the best of the sweep by a wide margin.
     ///
-    /// Two samples mixed, a sharp one over a heavy one, draw the HUD's own
-    /// curve on the bar target and are wrong on the page: the layer's opacity
-    /// does mix them, since what it does not draw is the desktop as it is, but
-    /// a sharp share carries whole letterforms, and at the six percent that
-    /// fits the bars the text behind the capsule stays legible where the HUD's
-    /// is a blob (fine energy 2.23 against the HUD's 1.00). Stacking two
-    /// backdrop layers does not mix them at all: the upper one samples what is
-    /// already composited below it, so a sharp copy over a blurred one is
-    /// measurably the blurred one. Note the layer's opacity also moves the
-    /// tone, and below 1 it reorders the filters in makeToneFilters: the offset
-    /// lands before the multiply there and clips a backdrop over 195.
+    /// What would fit is a mix, about 43 percent of the unblurred half
+    /// resolution sample over 57 percent of a heavy blur, which reproduces all
+    /// five bands. It cannot be built. Three mechanisms were measured and all
+    /// three are inert: the glass filter's own five-level blur pyramid
+    /// (inputBlurRadius with inputBlurOpacity0...4 and inputBlurDistance0...4)
+    /// changes nothing at any radius, with or without distances and with or
+    /// without the face; the layer's opacity does not mix a sharp share in
+    /// either, since at 0.90 the profile is identical to 1.0, which corrects
+    /// what an earlier round recorded here; and stacking two backdrop layers
+    /// does not mix, because the upper one samples what is already composited
+    /// below it.
     ///
     /// The radius is not a smooth dial. It is quantised somewhere inside the
-    /// filter and 0.6 measured differently on two runs, where 0.8 repeats.
+    /// filter: 0.6 measures as unblurred, and 0.8 is far sharper than 1.0.
     static let backdropScale = 0.5
-    static let backdropBlurRadius = 2.0
+    static let backdropBlurRadius = 1.0
     /// How far the edge bends its backdrop, and over how many points. Both are
     /// fitted against the HUD's own bend, measured as displacement rather than
     /// by eye: a stripe backdrop of one period behind both capsules, and the
