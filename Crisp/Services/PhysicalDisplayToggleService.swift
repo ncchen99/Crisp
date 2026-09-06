@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import ColorSync
 import IOKit
+import os.log
 
 /// Disconnects / reconnects REAL (physical) displays on the fly, the way BetterDisplay's
 /// "Disconnect Display" works. This is fundamentally different from VirtualDisplayService:
@@ -31,6 +32,9 @@ final class PhysicalDisplayToggleService: ObservableObject {
         var name: String
         var width: Int
         var height: Int
+        /// Whether this was the built-in panel, captured at disconnect time. Optional so
+        /// records written before this field decode instead of throwing away the whole list.
+        var isBuiltin: Bool?
         var id: String { uuid }
     }
 
@@ -93,6 +97,21 @@ final class PhysicalDisplayToggleService: ObservableObject {
         }
     }
 
+    // MARK: - Logging
+
+    /// The disconnect path was the one display capability with no unified-log presence, which
+    /// left issue #33 (a whole-machine freeze on reconnect through a Lenovo hub) with only
+    /// WindowServer's half of the story: a 29.5 s silence in the reporter's capture and
+    /// nothing from us to say what we had asked for, or how long the ask took.
+    private nonisolated static let log = Logger(subsystem: "com.crisp.app", category: "display")
+
+    /// Matches DDCService's threshold so slow operations read the same across categories.
+    private nonisolated static let slowOpThresholdMs = 500.0
+
+    private nonisolated static func millisSince(_ start: DispatchTime) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+    }
+
     // MARK: - Support gate
 
     /// True only on Apple Silicon. The disconnect API is a no-op / misbehaves on Intel.
@@ -139,14 +158,20 @@ final class PhysicalDisplayToggleService: ObservableObject {
         let virtual = VirtualDisplayService.shared
         return ids.prefix(Int(count)).filter { id in
             guard !virtual.isVirtualDisplay(id) else { return false }
-            // Once the last real display is gone macOS spawns a placeholder
-            // display (vendor 'unkn' 0x756E6B6E, model 'virt' 0x76697274,
-            // fingerprinted live on macOS 26). It is not a viewable screen, and
-            // counting it kept restoreIfNoActiveDisplay from ever firing in the
-            // all-screens-black state it exists to fix.
-            let isPlaceholder = CGDisplayVendorNumber(id) == 0x756E6B6E
-                && CGDisplayModelNumber(id) == 0x76697274
-            return !isPlaceholder
+            // Real panels carry 16-bit EDID vendor and product codes. Two kinds of
+            // entry enumerate as active without a screen behind them, and both fail
+            // that shape: the placeholder macOS spawns once the last real display is
+            // gone (vendor 'unkn' 0x756E6B6E, model 'virt' 0x76697274, four-character
+            // tags that cannot fit in 16 bits; fingerprinted live on macOS 26), and the
+            // stub a re-enabled record leaves when its hardware is no longer attached
+            // (vendor 0, model 0; observed live by @ncchen99 on #91, online and active,
+            // showing nothing). Counting either kept restoreIfNoActiveDisplay from
+            // firing, or let it stop, in the all-screens-black state it exists to fix.
+            // Matching by shape rather than by the one fingerprint also survives a
+            // future macOS renaming the placeholder.
+            let vendor = CGDisplayVendorNumber(id), model = CGDisplayModelNumber(id)
+            let hasNoPanel = vendor == 0 || model == 0 || vendor > 0xFFFF || model > 0xFFFF
+            return !hasNoPanel
         }.count
     }
 
@@ -174,16 +199,61 @@ final class PhysicalDisplayToggleService: ObservableObject {
             displayID: displayID,
             name: display.name,
             width: display.pixelWidth,
-            height: display.pixelHeight
+            height: display.pixelHeight,
+            isBuiltin: display.isBuiltin
         )
 
+        Self.log.notice("disconnect requested: \(display.displayUUID, privacy: .public) id \(displayID, privacy: .public)")
+        let otherModes = currentModes(excluding: displayID)
         let result = await setEnabled(false, displayID: displayID)
         if case .success = result {
             disconnected.removeAll { $0.uuid == snapshot.uuid }
             disconnected.append(snapshot)
             saveDesired()
+            Task { [weak self] in await self?.restoreModes(otherModes) }
         }
         return result
+    }
+
+    /// The mode of every other online display, taken before a disconnect so it can be put
+    /// back afterwards. macOS keeps an arrangement per set of attached displays and applies
+    /// it whenever the set changes, so taking one display away can move the others to
+    /// whatever they last ran at in the smaller set: on this Mac a 1440p 165 Hz panel dropped
+    /// to 1080p 60 Hz and the built-in changed scale (issue #108). It is WindowServer's doing,
+    /// not Crisp's: the same SkyLight disable from a bare probe with Crisp quit does it too,
+    /// and pinning the other modes inside the disable transaction is accepted and ignored.
+    /// The user asked for one display to go, not for the rest to change, so the modes they
+    /// had go back in a second transaction once the arrangement has landed.
+    private func currentModes(excluding displayID: CGDirectDisplayID) -> [(CGDirectDisplayID, CGDisplayMode)] {
+        onlineDisplayIDs().filter { $0 != displayID }.compactMap { id in
+            CGDisplayCopyDisplayMode(id).map { (id, $0) }
+        }
+    }
+
+    private func restoreModes(_ modes: [(CGDirectDisplayID, CGDisplayMode)]) async {
+        // A mirror target's mode is driven by its source (see ResolutionService).
+        let moved = {
+            modes.compactMap { id, mode -> (CGDirectDisplayID, CGDisplayMode, CGDisplayMode)? in
+                guard self.onlineDisplayIDs().contains(id), !MirroredModeService.shared.isActive(for: id),
+                      let current = CGDisplayCopyDisplayMode(id),
+                      current.ioDisplayModeID != mode.ioDisplayModeID else { return nil }
+                return (id, current, mode)
+            }
+        }
+        // The re-arrangement landed about a second after the commit here. Poll for it rather
+        // than wait a fixed time, so the flip the user sees is as short as it can be; the
+        // extra tick after the first move catches a second display changing in the same breath.
+        var changed = moved()
+        for _ in 0..<30 where changed.isEmpty {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            changed = moved()
+        }
+        guard !changed.isEmpty else { return }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        for (id, current, mode) in moved() {
+            let restored = await ResolutionService.applyModeSync(mode, on: id)
+            Self.log.notice("display \(id, privacy: .public) moved to \(current.width, privacy: .public)x\(current.height, privacy: .public) after the disconnect, restoring \(mode.width, privacy: .public)x\(mode.height, privacy: .public) @\(Int(mode.refreshRate), privacy: .public): \(restored ? "ok" : "failed", privacy: .public)")
+        }
     }
 
     /// Reconnects a previously disconnected display and drops it from the disconnected set.
@@ -195,12 +265,22 @@ final class PhysicalDisplayToggleService: ObservableObject {
         }
         // The CGDirectDisplayID can be reassigned; re-resolve by UUID against the full list.
         let targetID = resolveCurrentID(for: record) ?? record.displayID
+        Self.log.notice("reconnect requested: \(uuid, privacy: .public) id \(targetID, privacy: .public)")
         let result = await setEnabled(true, displayID: targetID)
         if case .success = result {
             disconnected.removeAll { $0.uuid == uuid }
             saveDesired()
         }
         return result
+    }
+
+    /// Built-in test for a disconnect record. Prefers the flag captured at disconnect time,
+    /// while the ID still answered truthfully: in the all-black state this matters in,
+    /// SLSGetDisplayList has collapsed to the placeholder display and CGDisplayIsBuiltin
+    /// answers with garbage for the stale IDs left over. Records written before that flag
+    /// existed fall back to the live query, which is no worse than before.
+    private func wasBuiltin(_ record: DisconnectedDisplay, id: CGDirectDisplayID) -> Bool {
+        record.isBuiltin ?? (CGDisplayIsBuiltin(id) == 1)
     }
 
     /// Finds the current CGDirectDisplayID for a disconnected record by matching its UUID
@@ -266,6 +346,9 @@ final class PhysicalDisplayToggleService: ObservableObject {
         }
         // Held (released) at every exit below; releasing it is what removes the display.
         defer { withExtendedLifetime(sleepGuard) {} }
+        // Logged so a capture can tell a blink's disable/enable pair from a user's own
+        // disconnect and reconnect, which look identical at the transaction level.
+        Self.log.notice("soft reconnect blink: \(blinkUUID, privacy: .public) id \(startID, privacy: .public)")
         softReconnectInFlight.insert(blinkUUID)
         defer { softReconnectInFlight.remove(blinkUUID) }
         // Persist before disabling: if the app dies between here and a verified re-enable
@@ -352,23 +435,60 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// `.permanently` is the flag the proven implementations (Lunar BlackOut, screen_tune,
     /// BetterDisplay) use, it commits the change so the disconnect actually takes effect.
     private func setEnabled(_ enabled: Bool, displayID: CGDirectDisplayID) async -> Result<Void, ToggleError> {
-        await CGHelpers.runWithTimeout(seconds: 10, fallback: .failure(.configurationFailed(.failure))) {
+        let action = enabled ? "enable" : "disable"
+        let waited = DispatchTime.now()
+        // No DDC traffic while the transaction runs. WindowServer's enable waits behind an
+        // in-flight I2C read on the DCP and the whole machine freezes with it: a 6 s volume
+        // read on the display Crisp had just disconnected gave a 6 s freeze on its reconnect,
+        // the commit completing within 60 ms of the read giving up, three times in a row.
+        let releaseDDC = await DDCService.shared.hold()
+        defer { releaseDDC() }
+        let heldMs = Self.millisSince(waited)
+        if heldMs > Self.slowOpThresholdMs {
+            Self.log.notice("\(action, privacy: .public) \(displayID, privacy: .public): waited \(Int(heldMs), privacy: .public) ms for DDC to go idle")
+        }
+        let result: Result<Void, ToggleError> = await CGHelpers.runWithTimeout(
+            seconds: 10, fallback: .failure(.configurationFailed(.failure))
+        ) {
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+                Self.log.error("\(action, privacy: .public) \(displayID, privacy: .public): CGBeginDisplayConfiguration failed")
                 return .failure(.configurationFailed(.failure))
             }
             let setErr = SLSConfigureDisplayEnabled(cfg, displayID, enabled)
             guard setErr == .success else {
                 CGCancelDisplayConfiguration(cfg)
+                Self.log.error("\(action, privacy: .public) \(displayID, privacy: .public): SLSConfigureDisplayEnabled failed \(setErr.rawValue, privacy: .public)")
                 return .failure(.configurationFailed(setErr))
             }
+            // The commit, and the call that can block. It runs on a background queue and
+            // keeps running after the 10 s wrapper above gives up, because the wrapper only
+            // stops waiting, it cannot cancel this. While WindowServer holds it the whole
+            // machine can stall rather than just Crisp, which is what issue #33 reports.
+            // Timed unconditionally so a capture states the real duration instead of
+            // leaving a silence to be guessed at.
+            let committing = DispatchTime.now()
             let complete = CGCompleteDisplayConfiguration(cfg, .permanently)
+            let commitMs = Self.millisSince(committing)
             guard complete == .success else {
                 CGCancelDisplayConfiguration(cfg)
+                Self.log.error("\(action, privacy: .public) \(displayID, privacy: .public): commit failed \(complete.rawValue, privacy: .public) after \(Int(commitMs), privacy: .public) ms")
                 return .failure(.configurationFailed(complete))
+            }
+            if commitMs > Self.slowOpThresholdMs {
+                Self.log.notice("slow \(action, privacy: .public) \(displayID, privacy: .public): commit took \(Int(commitMs), privacy: .public) ms")
             }
             return .success(())
         }
+        // What Crisp actually acted on, which is not the same thing: on a wrapper timeout
+        // this reports a failure at ~10000 ms while the commit above is still running.
+        let waitedMs = Self.millisSince(waited)
+        if case .failure = result {
+            Self.log.notice("\(action, privacy: .public) \(displayID, privacy: .public): reported failure after \(Int(waitedMs), privacy: .public) ms")
+        } else {
+            Self.log.notice("\(action, privacy: .public) \(displayID, privacy: .public): reported success after \(Int(waitedMs), privacy: .public) ms")
+        }
+        return result
     }
 
     /// Safety net for softReconnect's re-enable retries all failing: sweeps every SLS-disabled
@@ -560,27 +680,54 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// has a live screen. The settle delay rides out transient empty display lists during
     /// wake/replug storms, so a monitor that comes right back keeps the disconnect intact.
     func restoreIfNoActiveDisplay() {
-        guard isSupported, !disconnected.isEmpty, !restoreInFlight else { return }
-        guard physicalActiveDisplayCount() == 0 else { return }
+        guard isSupported, !disconnected.isEmpty else { return }
+        // With records to act on, every stand-down is worth a line: a capture of a dark
+        // desk otherwise cannot tell "never asked" from "asked and refused", and which guard
+        // refused (issue #92: a dock pulled during sleep can keep its displays in the online
+        // list until the link times out, and those count as active).
+        let active = physicalActiveDisplayCount()
+        guard !restoreInFlight, active == 0 else {
+            Self.log.notice("restore asked with \(self.disconnected.count, privacy: .public) record(s): \(active, privacy: .public) active display(s), in flight \(self.restoreInFlight, privacy: .public), standing down")
+            return
+        }
         restoreInFlight = true
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self else { return }
             defer { self.restoreInFlight = false }
-            guard self.physicalActiveDisplayCount() == 0 else { return }
+            let settled = self.physicalActiveDisplayCount()
+            guard settled == 0 else {
+                Self.log.notice("restore settled: \(settled, privacy: .public) active display(s) after 2 s, standing down")
+                return
+            }
+            // This path acts with every screen black, so without a line here a capture
+            // cannot tell a Crisp restore from macOS re-probing on its own (noted from
+            // the outside in #91).
+            Self.log.notice("no active display, restoring from \(self.disconnected.count, privacy: .public) record(s)")
             // In the placeholder-display state SLSGetDisplayList shrinks to just
             // the placeholder (verified live), so records that fail to resolve
             // must fall back to their last-known ID rather than being dropped:
             // SLSConfigureDisplayEnabled still honors a stale ID for attached
             // hardware, while detached hardware fails at
             // CGCompleteDisplayConfiguration (error 1001) and the loop moves on.
-            // Prefer the built-in panel when the ID still classifies; stale IDs
-            // answer CGDisplayIsBuiltin with garbage, which sorts as non-builtin.
+            // Prefer the built-in panel, from the flag captured at disconnect time
+            // (see wasBuiltin): the IDs here are stale, so a live query is unreliable.
             let candidates = self.disconnected
                 .map { record in (record, self.resolveCurrentID(for: record) ?? record.displayID) }
-                .sorted { CGDisplayIsBuiltin($0.1) == 1 && CGDisplayIsBuiltin($1.1) != 1 }
+                .sorted { self.wasBuiltin($0.0, id: $0.1) && !self.wasBuiltin($1.0, id: $1.1) }
             for (record, _) in candidates {
-                if case .success = await self.reconnect(uuid: record.uuid) { return }
+                // macOS re-probes displays by itself in this state and often wins the race;
+                // stop as soon as anything viewable is back, whoever brought it back.
+                guard self.physicalActiveDisplayCount() == 0 else { return }
+                guard case .success = await self.reconnect(uuid: record.uuid) else { continue }
+                // A successful transaction is NOT proof of recovery (see verifyBackOnline):
+                // around sleep transitions it reports success while the display stays
+                // disabled, and that lie used to end the restore with every screen still
+                // black. Only enumeration ends it; otherwise move on to the next record.
+                for _ in 0..<20 {
+                    if self.physicalActiveDisplayCount() > 0 { return }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
             }
         }
     }

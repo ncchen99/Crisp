@@ -80,18 +80,59 @@ final class CrispControlServer {
     }
 
     private func response(to request: Data) async -> Data {
-        let displays = displayManager.displays.map {
-            CrispControlDisplay(
-                id: $0.displayID, name: $0.name,
-                brightness: min($0.brightness, 100), isBuiltin: $0.isBuiltin
+        let managedDisplays = displayManager.displays
+        let boostService = BrightnessBoostService.shared
+        let displays = managedDisplays.map { display in
+            let resolution = display.currentDisplayMode.map { mode in
+                CrispControlResolution(
+                    logicalWidth: mode.width,
+                    logicalHeight: mode.height,
+                    pixelWidth: mode.pixelWidth,
+                    pixelHeight: mode.pixelHeight,
+                    refreshRate: mode.refreshRate,
+                    isHiDPI: mode.isHiDPI
+                )
+            }
+            return CrispControlDisplay(
+                id: display.displayID,
+                name: display.name,
+                brightness: display.brightness,
+                maxBrightness: boostService.maximumBrightness(for: display),
+                isBuiltin: display.isBuiltin,
+                uuid: display.displayUUID,
+                resolution: resolution,
+                brightnessBackend: BrightnessService.shared.brightnessBackend(for: display)
             )
         }
-        let result = CrispControlModel.handle(request, displays: displays)
+        let result = CrispControlModel.handle(request, displays: displays) { id in
+            guard let display = managedDisplays.first(where: { $0.displayID == id }) else { return nil }
+            return CrispControlBrightnessBoostState(
+                displayID: id,
+                eligible: boostService.isEligible(display),
+                enabled: boostService.isEnabled(for: display)
+            )
+        }
         if let change = result.brightnessChange {
-            guard let display = displayManager.displays.first(where: { $0.displayID == change.displayID }) else {
+            guard let display = managedDisplays.first(where: { $0.displayID == change.displayID }) else {
                 return CrispControlModel.encode(.failure("display not found"))
             }
+            if change.brightness > 100,
+               let maximum = displays.first(where: { $0.id == change.displayID })?.maxBrightness {
+                boostService.settleMaximumBrightness(maximum, for: display)
+            }
             await BrightnessService.shared.setBrightness(change.brightness, for: display)
+        }
+        if let change = result.brightnessBoostChange {
+            guard let display = managedDisplays.first(where: { $0.displayID == change.displayID }) else {
+                return CrispControlModel.encode(.failure("display not found"))
+            }
+            guard !change.enabled || boostService.isEligible(display) else {
+                return CrispControlModel.encode(.failure("extra brightness is not eligible for this display"))
+            }
+            let accepted = await boostService.setEnabled(change.enabled, for: display)
+            return CrispControlModel.encode(
+                CrispControlModel.brightnessBoostSetResponse(enabled: change.enabled, accepted: accepted)
+            )
         }
         return CrispControlModel.encode(result.response)
     }
