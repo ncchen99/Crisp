@@ -253,12 +253,26 @@ final class OSDBannerService {
     /// The signal is a window covering the display exactly. A zoomed window
     /// stops short of the menu bar and does not match, and nothing covers a
     /// display exactly in the ordinary case (measured in both states).
+    ///
+    /// The answer is held briefly per display. This runs on every key press,
+    /// and the window list is a round trip to the window server: usually about
+    /// 1.3 ms here, but measured at 53 ms on a bad one with only thirty
+    /// windows open, which on a held key is a visible hitch in the fade the
+    /// press itself is driving. A space takes far longer than the hold to come
+    /// and go, so a stale answer inside it cannot be wrong in practice.
+    private static var fullScreenCache: [CGDirectDisplayID: (value: Bool, at: Date)] = [:]
+    private static let fullScreenCacheLife: TimeInterval = 0.5
+
     private static func showsFullScreenWindow(_ screen: NSScreen) -> Bool {
         guard let displayID = displayID(of: screen) else { return false }
+        if let hit = fullScreenCache[displayID],
+           Date().timeIntervalSince(hit.at) < fullScreenCacheLife {
+            return hit.value
+        }
         let bounds = CGDisplayBounds(displayID)
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                  kCGNullWindowID) as? [[String: Any]] ?? []
-        return windows.contains { window in
+        let covered = windows.contains { window in
             guard window[kCGWindowLayer as String] as? Int == 0,
                   let frame = window[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = frame["X"], let y = frame["Y"],
@@ -266,6 +280,8 @@ final class OSDBannerService {
             return abs(x - bounds.minX) < 2 && abs(y - bounds.minY) < 2
                 && abs(width - bounds.width) < 2 && abs(height - bounds.height) < 2
         }
+        fullScreenCache[displayID] = (covered, Date())
+        return covered
     }
 
     /// Where Crisp's menu bar item sits on `screen`, or nil when there is no
@@ -309,6 +325,26 @@ final class OSDBannerService {
             setHighlight?(true)
         } else {
             light()
+        }
+    }
+
+    /// The close badge took the banner away, so the light goes with it instead
+    /// of sitting on for the rest of the hold. Another screen's banner may
+    /// still be up, and it keeps the light.
+    fileprivate func dismissed(_ panel: OSDBannerPanel) {
+        guard !panels.values.contains(where: { $0 !== panel && $0.alphaValue > 0 && !$0.exiting })
+        else { return }
+        unlightWork?.cancel()
+        setHighlight?(false)
+    }
+
+    /// Takes every banner away at once. Crisp's own panel carries the same
+    /// value on its own slider, so a banner already up when the panel opens is
+    /// noise over it, and it floats above the panel: BrightnessHUDService
+    /// keeps a new one away and calls this for the ones that are there.
+    func hideVisible() {
+        for panel in panels.values where panel.alphaValue > 0 {
+            panel.dismiss()
         }
     }
 
@@ -422,11 +458,33 @@ final class OSDBannerService {
         return [multiply, add, saturate]
     }
 
+    /// Every fallback below this depends on it returning nil for a filter the
+    /// system does not have, and two things had to be added for that to be
+    /// true. The selector is checked, because performing a missing one raises
+    /// and takes the app down on the first key press rather than degrading.
+    /// And the name is checked against the system's own list, because
+    /// filterWithName: answers ANY name with a live object whose inputKeys are
+    /// empty: without this a renamed filter would leave the capsule with no
+    /// grey and no bend, and nothing would return nil to say so.
     private static func makeFilter(_ name: String) -> NSObject? {
-        guard let filterClass = NSClassFromString("CAFilter") as? NSObject.Type else { return nil }
+        guard let filterClass = NSClassFromString("CAFilter") as? NSObject.Type,
+              filterClass.responds(to: NSSelectorFromString("filterWithName:")),
+              filterTypes.contains(name)
+        else { return nil }
         return filterClass.perform(NSSelectorFromString("filterWithName:"), with: name)?
             .takeUnretainedValue() as? NSObject
     }
+
+    /// The filter names this system has, read once. Empty if the call is gone,
+    /// which makes every makeFilter above fail into its own fallback.
+    private static let filterTypes: Set<String> = {
+        guard let filterClass = NSClassFromString("CAFilter") as? NSObject.Type,
+              filterClass.responds(to: NSSelectorFromString("filterTypes")),
+              let names = filterClass.perform(NSSelectorFromString("filterTypes"))?
+                .takeUnretainedValue() as? [String]
+        else { return [] }
+        return Set(names)
+    }()
 
     /// Bends the backdrop into the capsule's edge, the way a real edge of
     /// glass would. The HUD does this and it is the last thing that tells the
@@ -891,6 +949,8 @@ final class OSDBannerPanel: NSPanel {
     var badge: OSDBadgeView?
     var badgeBackdrop: CALayer?
     private var hideWork: DispatchWorkItem?
+    /// Whether Crisp was the front app when the pointer arrived on the capsule.
+    private var crispWasActive = false
     private var keepAliveWork: DispatchWorkItem?
     /// Where the banner sits when it is up. Kept so a pointer arriving during
     /// the exit can bring it back to the frame it was leaving.
@@ -902,7 +962,7 @@ final class OSDBannerPanel: NSPanel {
     /// Whether an exit has run since the last reveal. A press lands inside one
     /// often, one hold after the press before it. Nothing clears this when the
     /// exit ends on its own: by then stopping it is a pair of no-ops.
-    private var exiting = false
+    fileprivate var exiting = false
 
     /// Places the banner at `frame` and brings it to full opacity, restarting
     /// the hide timer. A hidden or fading banner plays the system HUD's entry;
@@ -924,9 +984,18 @@ final class OSDBannerPanel: NSPanel {
             // is why the flag says this and not the value.
             stopAnimations()
             exiting = false
+            // The exit left the window part way down and part way in. The
+            // entry window from the press before it is meaningless now, and
+            // leaving it set skips the branch below and strands the banner
+            // dim at the shrunk frame for the whole hold.
+            entryEnds = .distantPast
         }
         if Date() < entryEnds {
-            // The grow in flight already lands on `frame`.
+            // The grow in flight lands on the frame it started for. That is
+            // the same frame on a key repeat, but not if the menu bar item
+            // moved or the screen changed between two presses, and nothing
+            // later corrects a settled banner, so re-aim it here.
+            if frame != self.frame { setFrame(frame, display: false, animate: true) }
         } else if alphaValue < 1 {
             entryEnds = Date().addingTimeInterval(OSDBannerService.fadeInDuration)
             // Only from hidden: caught mid-exit the banner is on screen, and
@@ -971,8 +1040,10 @@ final class OSDBannerPanel: NSPanel {
     func setHovering(_ hovering: Bool) {
         // A banner that has gone stays gone. Hidden means alpha 0 and the
         // window is still there, so the pointer crossing the corner it used to
-        // be in still reaches this, and it must not bring it back.
-        if hovering && alphaValue == 0 { return }
+        // be in still reaches this, and it must not bring it back. Nor does a
+        // banner still fading out under Crisp's own panel take the pointer,
+        // which would take key away from the panel and close it.
+        if hovering && (alphaValue == 0 || BrightnessHUDService.shared.suppressed) { return }
         guard model.hovering != hovering else { return }
         model.hovering = hovering
         // The window is wider than the capsule (see windowMargin), and a
@@ -992,8 +1063,13 @@ final class OSDBannerPanel: NSPanel {
         // banner is merely up, or every brightness press would take the
         // keyboard away from whatever is in front.
         if hovering {
+            // Only give the keyboard back to the app it came from. Crisp is
+            // its own app in front while an update window or the About box is
+            // up, and deactivating on the way out would put that behind
+            // whatever is next.
+            crispWasActive = NSApp.isActive
             makeKey()
-        } else if isKeyWindow {
+        } else if isKeyWindow && !crispWasActive {
             NSApp.deactivate()
         }
         OSDBannerService.shared.hoverChanged(hovering)
@@ -1025,6 +1101,7 @@ final class OSDBannerPanel: NSPanel {
     func dismiss() {
         setHovering(false)
         hideWork?.cancel()
+        OSDBannerService.shared.dismissed(self)
         fadeOut()
     }
 

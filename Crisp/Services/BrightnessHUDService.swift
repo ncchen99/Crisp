@@ -40,7 +40,14 @@ final class BrightnessHUDService: @unchecked Sendable {
     /// Held while Crisp's own panel is open. The panel carries the same value
     /// on its own slider, and a second one over it is noise, so the OSD stays
     /// away until the panel closes. AppDelegate sets this.
-    var suppressed = false
+    var suppressed = false {
+        didSet {
+            // A banner already up when the panel opens floats over it, and the
+            // pointer landing on it takes key away from the panel.
+            guard suppressed, suppressed != oldValue else { return }
+            if #available(macOS 26.0, *) { OSDBannerService.shared.hideVisible() }
+        }
+    }
 
     // MARK: - Public API
 
