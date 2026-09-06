@@ -1019,8 +1019,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        p.level = .popUpMenu
+        // Order matters: isFloatingPanel assigns the window level (.floating,
+        // 3), so setting it after the level silently threw the level away and
+        // the panel ran below every other app's utility windows instead of at
+        // the level the system's own menu bar popovers use.
         p.isFloatingPanel = true
+        p.level = .popUpMenu
         p.hidesOnDeactivate = false
         p.isMovable = false
         p.isOpaque = false
