@@ -168,7 +168,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return 0 }
         let virtual = VirtualDisplayService.shared
-        return ids.prefix(Int(count)).filter { id in
+        let viewable = ids.prefix(Int(count)).filter { id in
             guard !virtual.isVirtualDisplay(id) else { return false }
             // Real panels carry 16-bit EDID vendor and product codes. Two kinds of
             // entry enumerate as active without a screen behind them, and both fail
@@ -184,7 +184,47 @@ final class PhysicalDisplayToggleService: ObservableObject {
             let vendor = CGDisplayVendorNumber(id), model = CGDisplayModelNumber(id)
             let hasNoPanel = vendor == 0 || model == 0 || vendor > 0xFFFF || model > 0xFFFF
             return !hasNoPanel
-        }.count
+        }
+        // The shape filter above catches an entry with nothing behind it. It cannot catch
+        // the third kind, from #112: after an undock while asleep, WindowServer
+        // re-enumerates the absent externals at the full wake with their EDID identities
+        // intact, so they are active, 16-bit and completely real-looking, and they stay
+        // that way until the dock goes back in -- measured at 104 s with the desk dark the
+        // whole time and the rescue standing down on a count of 2.
+        //
+        // What actually left with the cable is the port's transport node, so ask the ports
+        // instead and cap the external count at what they can be carrying. Presence alone
+        // is not enough: an empty HDMI port keeps its node, reading hpd Unknown and sink 0
+        // in every sample of a whole run, and a phantom could hide behind it. Hot-plug
+        // detect is the part that tracks the cable.
+        let externals = viewable.filter { CGDisplayIsBuiltin($0) != 1 }.count
+        let builtin = viewable.count - externals
+        return PhantomPortCap.activeCount(builtin: builtin, external: externals, portCap: liveDisplayPortCount())
+    }
+
+    /// The number of ports that can have a display behind them right now: a DisplayPort or
+    /// Thunderbolt transport node with hot-plug detect asserted.
+    ///
+    /// nil rather than 0 when the machine exposes no transport nodes of either class at
+    /// all, which means the signal is not available here rather than that nothing is
+    /// plugged in -- capping on that would black out a desk this rule has never seen.
+    /// A Mac that does expose them and reports none asserted is the #112 state, and 0 is
+    /// the right answer there.
+    private func liveDisplayPortCount() -> Int? {
+        var nodes = 0, asserted = 0
+        for cls in ["IOPortTransportStateDisplayPort", "IOPortTransportStateCIO"] {
+            var it: io_iterator_t = 0
+            guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching(cls), &it) == KERN_SUCCESS else { continue }
+            defer { IOObjectRelease(it) }
+            while case let node = IOIteratorNext(it), node != 0 {
+                defer { IOObjectRelease(node) }
+                nodes += 1
+                let hpd = IORegistryEntryCreateCFProperty(node, "HPD_StateDescription" as CFString, kCFAllocatorDefault, 0)?
+                    .takeRetainedValue() as? String
+                if hpd == "High" { asserted += 1 }
+            }
+        }
+        return nodes == 0 ? nil : asserted
     }
 
     private func uuid(for displayID: CGDirectDisplayID) -> String {
